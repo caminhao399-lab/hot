@@ -96,34 +96,22 @@ def db():
     return conn
 
 
-def upsert_user(message: Message, age_confirmed: bool | None = None):
+def upsert_user(message: Message):
     u = message.from_user
     ts = now().isoformat()
     with closing(db()) as conn:
         existing = conn.execute("SELECT telegram_id FROM users WHERE telegram_id=?", (u.id,)).fetchone()
         if existing:
-            if age_confirmed is None:
-                conn.execute(
-                    "UPDATE users SET username=?, first_name=?, updated_at=? WHERE telegram_id=?",
-                    (u.username, u.first_name, ts, u.id),
-                )
-            else:
-                conn.execute(
-                    "UPDATE users SET username=?, first_name=?, age_confirmed=?, updated_at=? WHERE telegram_id=?",
-                    (u.username, u.first_name, int(age_confirmed), ts, u.id),
-                )
+            conn.execute(
+                "UPDATE users SET username=?, first_name=?, age_confirmed=1, updated_at=? WHERE telegram_id=?",
+                (u.username, u.first_name, ts, u.id),
+            )
         else:
             conn.execute(
                 "INSERT INTO users(telegram_id, username, first_name, age_confirmed, created_at, updated_at) VALUES(?,?,?,?,?,?)",
-                (u.id, u.username, u.first_name, int(bool(age_confirmed)), ts, ts),
+                (u.id, u.username, u.first_name, 1, ts, ts),
             )
         conn.commit()
-
-
-def age_confirmed(user_id: int) -> bool:
-    with closing(db()) as conn:
-        row = conn.execute("SELECT age_confirmed FROM users WHERE telegram_id=?", (user_id,)).fetchone()
-        return bool(row and row["age_confirmed"])
 
 
 def active_subscription(user_id: int) -> bool:
@@ -164,15 +152,6 @@ def save_invite(user_id: int, chat_id: str, link: str, expires: datetime):
         conn.commit()
 
 
-def keyboard_start() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="🔞 Tenho 18 anos ou mais", callback_data="age_yes")],
-            [InlineKeyboardButton(text="❌ Sair", callback_data="age_no")],
-        ]
-    )
-
-
 def keyboard_menu() -> InlineKeyboardMarkup:
     rows = [
         [InlineKeyboardButton(text="⭐ Assinar acesso VIP", callback_data="buy")],
@@ -191,42 +170,15 @@ def support_text() -> str:
 @router.message(CommandStart())
 async def start(message: Message):
     upsert_user(message)
-    if not age_confirmed(message.from_user.id):
-        await message.answer(
-            "<b>Área VIP 18+</b>\n\nEste bot é destinado exclusivamente a maiores de 18 anos.\n\nAo continuar, você confirma que tem 18 anos ou mais e concorda em usar o serviço de acordo com as leis aplicáveis e as regras do Telegram.",
-            reply_markup=keyboard_start(),
-        )
-        return
     await message.answer(
-        "<b>Bem-vindo à Área VIP.</b>\n\nEscolha uma opção abaixo:",
+        "<b>Bem-vindo à Área VIP.</b>\n\nServiço destinado exclusivamente a maiores de 18 anos.\n\nEscolha uma opção abaixo:",
         reply_markup=keyboard_menu(),
     )
-
-
-@router.callback_query(F.data == "age_yes")
-async def age_yes(callback: CallbackQuery):
-    await callback.answer("Confirmação registrada")
-    if callback.message:
-        upsert_user(callback.message, True)
-        await callback.message.edit_text(
-            "<b>Confirmação concluída.</b>\n\nAgora você pode escolher o acesso VIP.",
-            reply_markup=keyboard_menu(),
-        )
-
-
-@router.callback_query(F.data == "age_no")
-async def age_no(callback: CallbackQuery):
-    await callback.answer()
-    if callback.message:
-        await callback.message.edit_text("Acesso encerrado. Este serviço é somente para maiores de 18 anos.")
 
 
 @router.callback_query(F.data == "buy")
 async def buy(callback: CallbackQuery):
     await callback.answer()
-    if not age_confirmed(callback.from_user.id):
-        await callback.message.answer("Primeiro confirme que você tem 18 anos ou mais.", reply_markup=keyboard_start())
-        return
     if active_subscription(callback.from_user.id):
         await callback.message.answer("Você já possui uma assinatura ativa. Use 'Meu acesso' para consultar a validade.", reply_markup=keyboard_menu())
         return
