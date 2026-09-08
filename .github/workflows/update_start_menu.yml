@@ -1,0 +1,31 @@
+name: Update start menu
+on:
+  push:
+permissions:
+  contents: write
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Update /start menu
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('app/main.py')
+          s = p.read_text()
+          old = '''def keyboard_menu() -> InlineKeyboardMarkup:\n    return InlineKeyboardMarkup(inline_keyboard=[\n        [InlineKeyboardButton(text="⭐ Assinar acesso VIP", callback_data="buy")],\n    ])'''
+          new = '''def keyboard_menu() -> InlineKeyboardMarkup:\n    return InlineKeyboardMarkup(inline_keyboard=[\n        [InlineKeyboardButton(text="⭐ Assinar acesso VIP", callback_data="buy")],\n        [InlineKeyboardButton(text="/meuacesso", callback_data="status")],\n    ])'''
+          if old not in s:
+              raise SystemExit('Expected keyboard_menu block not found')
+          p.write_text(s.replace(old, new, 1))
+          PY
+      - name: Commit change and remove temporary workflow
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app/main.py
+          git commit -m 'Add meuacesso button to start menu'
+          git rm .github/workflows/update_start_menu.yml
+          git commit -m 'Remove temporary menu update workflow'
+          git push
