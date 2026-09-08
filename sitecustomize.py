@@ -2,7 +2,10 @@
 
 import hashlib
 import importlib
+import json
 import os
+import urllib.parse
+import urllib.request
 import uuid
 
 # Keep BravoPay configuration normalized without exposing secrets.
@@ -94,9 +97,7 @@ try:
                     return JSONResponse({"ok": False}, status_code=401)
                 payload = await request.json()
                 main = importlib.import_module("app.main")
-                result = await main.dp.feed_raw_update(main.bot, payload)
-                # Telegram only needs a fast 2xx response. Handler replies are sent
-                # through the Bot API by aiogram, so no API method is serialized here.
+                await main.dp.feed_raw_update(main.bot, payload)
                 return JSONResponse({"ok": True})
 
             @self.on_event("startup")
@@ -106,6 +107,86 @@ try:
                 # SQLite DB. Disable those loops so deploys cannot duplicate reminders,
                 # expiration actions, or PIX polling.
                 main = importlib.import_module("app.main")
+
+                # Recover a missing local PIX order from BravoPay after a Render
+                # restart/redeploy. Free Render services have an ephemeral filesystem,
+                # so SQLite rows can disappear while the BravoPay transaction remains.
+                original_get_order = main.get_order
+
+                def _recovered_get_order(order_id):
+                    row = original_get_order(order_id)
+                    if row is not None:
+                        return row
+
+                    api_key = os.getenv("BRAVOPAY_API_KEY", "").strip()
+                    if not api_key or not order_id:
+                        return None
+
+                    base_url = os.getenv("BRAVOPAY_BASE_URL", "https://bravopay.club/api/v1").strip().rstrip("/")
+                    query = urllib.parse.urlencode({"external_reference": order_id, "limit": "1"})
+                    request = urllib.request.Request(
+                        f"{base_url}/transactions?{query}",
+                        headers={
+                            "Authorization": f"Bearer {api_key}",
+                            "Accept": "application/json",
+                        },
+                        method="GET",
+                    )
+                    try:
+                        with urllib.request.urlopen(request, timeout=10) as response:
+                            data = json.loads(response.read().decode("utf-8"))
+                    except Exception as exc:
+                        print(f"PIX recovery lookup failed: {exc}")
+                        return None
+
+                    items = data.get("data") if isinstance(data, dict) else None
+                    if not isinstance(items, list) or not items:
+                        return None
+                    tx = items[0] if isinstance(items[0], dict) else {}
+                    metadata = tx.get("metadata") if isinstance(tx.get("metadata"), dict) else {}
+                    telegram_id = str(metadata.get("telegram_user_id") or "")
+                    if not telegram_id.isdigit():
+                        return None
+
+                    amount_cents = int(tx.get("amount_cents") or 0)
+                    plan_key = str(metadata.get("plan") or "")
+                    if plan_key not in main.PLANS:
+                        plan_key = next(
+                            (key for key, plan in main.PLANS.items() if int(plan["amount_cents"]) == amount_cents),
+                            "",
+                        )
+                    if plan_key not in main.PLANS:
+                        return None
+
+                    transaction_id = str(tx.get("id") or "")
+                    if not transaction_id:
+                        return None
+                    status = str(tx.get("status") or "PENDING").upper()
+                    pix = tx.get("pix") if isinstance(tx.get("pix"), dict) else {}
+                    pix_code = str(pix.get("copy_paste") or "")
+                    created_at = str(tx.get("created_at") or main.now().isoformat())
+                    paid_at = str(tx.get("paid_at") or "") or None
+
+                    with main.closing(main.db()) as conn:
+                        conn.execute(
+                            "INSERT OR REPLACE INTO pix_orders (order_id, telegram_id, plan_key, transaction_id, status, amount_cents, pix_code, created_at, paid_at) VALUES(?,?,?,?,?,?,?,?,?)",
+                            (
+                                order_id,
+                                int(telegram_id),
+                                plan_key,
+                                transaction_id,
+                                status,
+                                amount_cents,
+                                pix_code,
+                                created_at,
+                                paid_at,
+                            ),
+                        )
+                        conn.commit()
+                    print(f"Recovered PIX order {order_id} from BravoPay")
+                    return original_get_order(order_id)
+
+                main.get_order = _recovered_get_order
 
                 async def _disabled_background_loop():
                     return None
