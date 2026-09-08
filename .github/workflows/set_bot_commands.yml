@@ -1,6 +1,9 @@
 name: Set Telegram command suggestions
 on:
   workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/set_bot_commands.yml'
 permissions:
   contents: write
 jobs:
