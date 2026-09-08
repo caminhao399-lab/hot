@@ -1,4 +1,7 @@
 import asyncio
+import hashlib
+import hmac
+import json
 import logging
 import os
 import secrets
@@ -7,12 +10,13 @@ from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import aiohttp
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.filters import Command, CommandStart
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice, Message, PreCheckoutQuery
-from fastapi import FastAPI
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 logging.basicConfig(level=logging.INFO)
@@ -23,11 +27,25 @@ BOT_USERNAME = os.getenv("BOT_USERNAME", "hotvip_oficial_bot").strip().lstrip("@
 CHANNEL_ID = os.getenv("CHANNEL_ID", "").strip()
 GROUP_ID = os.getenv("GROUP_ID", "").strip()
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0") or 0)
-PRICE_STARS = int(os.getenv("PRICE_STARS", "100") or 100)
-SUBSCRIPTION_DAYS = int(os.getenv("SUBSCRIPTION_DAYS", "30") or 30)
 SUPPORT_USERNAME = os.getenv("SUPPORT_USERNAME", "").strip().lstrip("@")
 VIDEO_FILE_ID = os.getenv("VIDEO_FILE_ID", "").strip()
 DB_PATH = os.getenv("DB_PATH", "/tmp/hot_bot.sqlite3")
+
+# PIX configuration. Secrets/identity data are read only from Render environment variables.
+GGPIX_API_KEY = os.getenv("GGPIX_API_KEY", "").strip()
+GGPIX_BASE_URL = os.getenv("GGPIX_BASE_URL", "https://ggpixapi.com/api/v1").strip().rstrip("/")
+PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "https://hot-1-ih2f.onrender.com").strip().rstrip("/")
+DEFAULT_PAYER_NAME = os.getenv("DEFAULT_PAYER_NAME", "").strip()
+DEFAULT_PAYER_DOCUMENT = os.getenv("DEFAULT_PAYER_DOCUMENT", "").strip()
+GGPIX_WEBHOOK_SECRET = os.getenv("GGPIX_WEBHOOK_SECRET", "").strip()
+
+# Plan catalog shown to customers. Provider name is intentionally never exposed.
+PLANS = {
+    "essential": {"label": "VIP Essencial", "amount_cents": 800, "days": 30},
+    "premium": {"label": "VIP Premium", "amount_cents": 1490, "days": 30},
+    "acervo": {"label": "VIP Premium + Acervo", "amount_cents": 1690, "days": 30},
+    "full": {"label": "Acesso Full + Bônus", "amount_cents": 2390, "days": 30},
+}
 
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN is required")
@@ -54,6 +72,18 @@ def db():
     conn.execute("CREATE TABLE IF NOT EXISTS subscriptions (id INTEGER PRIMARY KEY AUTOINCREMENT, telegram_id INTEGER NOT NULL, expires_at TEXT NOT NULL, charge_id TEXT UNIQUE, payload TEXT UNIQUE, created_at TEXT NOT NULL)")
     conn.execute("CREATE TABLE IF NOT EXISTS invite_links (id INTEGER PRIMARY KEY AUTOINCREMENT, telegram_id INTEGER NOT NULL, chat_id TEXT NOT NULL, invite_link TEXT NOT NULL, expires_at TEXT NOT NULL, created_at TEXT NOT NULL)")
     conn.execute("CREATE TABLE IF NOT EXISTS reminders (telegram_id INTEGER PRIMARY KEY, sent_at TEXT NOT NULL)")
+    conn.execute("""CREATE TABLE IF NOT EXISTS pix_orders (
+        order_id TEXT PRIMARY KEY,
+        telegram_id INTEGER NOT NULL,
+        plan_key TEXT NOT NULL,
+        transaction_id TEXT,
+        status TEXT NOT NULL,
+        amount_cents INTEGER NOT NULL,
+        pix_code TEXT,
+        created_at TEXT NOT NULL,
+        paid_at TEXT,
+        delivered_at TEXT
+    )""")
     conn.commit()
     return conn
 
@@ -77,7 +107,7 @@ def active_subscription(user_id: int) -> bool:
         return bool(row and datetime.fromisoformat(row["expires_at"]) > now())
 
 
-def add_subscription(user_id: int, charge_id: str, payload: str) -> datetime:
+def add_subscription(user_id: int, charge_id: str, payload: str, days: int) -> datetime:
     with closing(db()) as conn:
         row = conn.execute("SELECT expires_at FROM subscriptions WHERE telegram_id=? ORDER BY expires_at DESC LIMIT 1", (user_id,)).fetchone()
         base = now()
@@ -85,7 +115,7 @@ def add_subscription(user_id: int, charge_id: str, payload: str) -> datetime:
             previous = datetime.fromisoformat(row["expires_at"])
             if previous > base:
                 base = previous
-        expires = base + timedelta(days=SUBSCRIPTION_DAYS)
+        expires = base + timedelta(days=days)
         conn.execute("INSERT INTO subscriptions(telegram_id, expires_at, charge_id, payload, created_at) VALUES(?,?,?,?,?)", (user_id, expires.isoformat(), charge_id, payload, now().isoformat()))
         conn.execute("DELETE FROM reminders WHERE telegram_id=?", (user_id,))
         conn.commit()
@@ -103,6 +133,23 @@ def keyboard_menu() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="⭐ Assinar acesso VIP", callback_data="buy")],
         [InlineKeyboardButton(text="📅 Meu acesso", callback_data="status")],
         [InlineKeyboardButton(text="ℹ️ Regras e suporte", callback_data="support")],
+    ])
+
+
+def plans_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🟢 VIP Essencial — R$ 8,00", callback_data="plan:essential")],
+        [InlineKeyboardButton(text="🔴 VIP Premium — R$ 14,90", callback_data="plan:premium")],
+        [InlineKeyboardButton(text="🔒 VIP Premium + Acervo — R$ 16,90", callback_data="plan:acervo")],
+        [InlineKeyboardButton(text="🎁 Acesso Full + Bônus — R$ 23,90", callback_data="plan:full")],
+        [InlineKeyboardButton(text="⬅️ Voltar", callback_data="back")],
+    ])
+
+
+def pix_keyboard(order_id: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔄 Verificar pagamento", callback_data=f"pixcheck:{order_id}")],
+        [InlineKeyboardButton(text="❌ Cancelar", callback_data="back")],
     ])
 
 
@@ -144,6 +191,135 @@ def support_text() -> str:
     return f"Suporte: @{SUPPORT_USERNAME}" if SUPPORT_USERNAME else "Suporte: configure SUPPORT_USERNAME no Render."
 
 
+def configured_pix() -> bool:
+    return bool(GGPIX_API_KEY and DEFAULT_PAYER_NAME and len(DEFAULT_PAYER_DOCUMENT) in (11, 14))
+
+
+def order_payload(order_id: str) -> str:
+    return f"vip:{order_id}"
+
+
+async def ggpix_request(method: str, path: str, payload=None):
+    headers = {"X-API-Key": GGPIX_API_KEY, "Accept": "application/json"}
+    if payload is not None:
+        headers["Content-Type"] = "application/json"
+    url = f"{GGPIX_BASE_URL}{path}"
+    timeout = aiohttp.ClientTimeout(total=25)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with session.request(method, url, headers=headers, json=payload) as response:
+            raw = await response.text()
+            try:
+                data = json.loads(raw) if raw else {}
+            except json.JSONDecodeError:
+                data = {"raw": raw[:1000]}
+            if response.status >= 400:
+                log.error("PIX provider HTTP %s: %s", response.status, data)
+                raise RuntimeError(f"PIX HTTP {response.status}")
+            return data
+
+
+async def create_pix_order(user_id: int, plan_key: str):
+    if not configured_pix():
+        raise RuntimeError("PIX_NOT_CONFIGURED")
+    plan = PLANS[plan_key]
+    order_id = secrets.token_urlsafe(18)
+    payload = {
+        "amountCents": int(plan["amount_cents"]),
+        "description": f"Acesso VIP - {plan['label']}",
+        "payerName": DEFAULT_PAYER_NAME,
+        "payerDocument": DEFAULT_PAYER_DOCUMENT,
+        "externalId": order_id,
+        "webhookUrl": f"{PUBLIC_BASE_URL}/webhooks/ggpix",
+        "metadata": {"telegramUserId": str(user_id), "plan": plan_key},
+    }
+    data = await ggpix_request("POST", "/pix/in", payload)
+    transaction_id = str(data.get("id") or data.get("transactionId") or "")
+    pix_copy = data.get("pixCopyPaste") or data.get("pixCode") or ""
+    if not transaction_id or not pix_copy:
+        log.error("PIX response missing transaction id/code: %s", data)
+        raise RuntimeError("PIX_INVALID_RESPONSE")
+    with closing(db()) as conn:
+        conn.execute("""INSERT INTO pix_orders
+            (order_id, telegram_id, plan_key, transaction_id, status, amount_cents, pix_code, created_at)
+            VALUES(?,?,?,?,?,?,?,?)""", (order_id, user_id, plan_key, transaction_id, str(data.get("status") or "PENDING").upper(), int(plan["amount_cents"]), pix_copy, now().isoformat()))
+        conn.commit()
+    return order_id, pix_copy
+
+
+async def get_pix_status(transaction_id: str):
+    return await ggpix_request("GET", f"/transactions/{transaction_id}")
+
+
+def get_order(order_id: str):
+    with closing(db()) as conn:
+        return conn.execute("SELECT * FROM pix_orders WHERE order_id=?", (order_id,)).fetchone()
+
+
+async def deliver_order(order_id: str):
+    row = get_order(order_id)
+    if not row or row["delivered_at"]:
+        return
+    if str(row["status"]).upper() not in ("COMPLETE", "PAID"):
+        return
+    user_id = row["telegram_id"]
+    plan = PLANS[row["plan_key"]]
+    try:
+        expires = add_subscription(user_id, row["transaction_id"], order_payload(order_id), plan["days"])
+    except sqlite3.IntegrityError:
+        with closing(db()) as conn:
+            conn.execute("UPDATE pix_orders SET delivered_at=COALESCE(delivered_at, ?) WHERE order_id=?", (now().isoformat(), order_id))
+            conn.commit()
+        return
+    links = []
+    invite_expiry = now() + timedelta(hours=48)
+    for chat_id in (CHANNEL_ID, GROUP_ID):
+        if not chat_id:
+            continue
+        try:
+            invite = await bot.create_chat_invite_link(chat_id=chat_id, name=f"VIP {user_id}", expire_date=int(invite_expiry.timestamp()), member_limit=1)
+            save_invite(user_id, chat_id, invite.invite_link, invite_expiry)
+            links.append(invite.invite_link)
+        except Exception as exc:
+            log.exception("Could not create invite for %s: %s", chat_id, exc)
+    with closing(db()) as conn:
+        conn.execute("UPDATE pix_orders SET delivered_at=? WHERE order_id=?", (now().isoformat(), order_id))
+        conn.commit()
+    text = f"<b>Pagamento confirmado!</b> ⭐\n\nSeu <b>{plan['label']}</b> foi liberado.\nValidade: <b>{expires.strftime('%d/%m/%Y %H:%M UTC')}</b>.\n\n"
+    if links:
+        text += "<b>Seu acesso:</b>\n" + "\n".join(f'• <a href="{link}">Entrar na área VIP</a>' for link in links) + "\n\nNão compartilhe esse link."
+    else:
+        text += "Seu pagamento foi confirmado, mas o link da área privada não está configurado. Fale com o suporte."
+    await bot.send_message(user_id, text, reply_markup=keyboard_menu())
+
+
+async def verify_order(order_id: str):
+    row = get_order(order_id)
+    if not row:
+        return "NOT_FOUND"
+    if str(row["status"]).upper() in ("COMPLETE", "PAID"):
+        await deliver_order(order_id)
+        return row["status"]
+    data = await get_pix_status(row["transaction_id"])
+    status = str(data.get("status") or "").upper()
+    if status:
+        with closing(db()) as conn:
+            conn.execute("UPDATE pix_orders SET status=?, paid_at=CASE WHEN ? IN ('COMPLETE','PAID') THEN COALESCE(paid_at, ?) ELSE paid_at END WHERE order_id=?", (status, status, now().isoformat(), order_id))
+            conn.commit()
+    if status in ("COMPLETE", "PAID"):
+        await deliver_order(order_id)
+    return status or "UNKNOWN"
+
+
+def webhook_signature_valid(raw_body: bytes, signature: str) -> bool:
+    if not GGPIX_WEBHOOK_SECRET:
+        return True
+    expected = hmac.new(GGPIX_WEBHOOK_SECRET.encode(), raw_body, hashlib.sha256).hexdigest()
+    received = signature.strip()
+    if received.startswith("sha256="):
+        received = received[7:]
+    return hmac.compare_digest(expected, received)
+
+
 @router.message(CommandStart())
 async def start(message: Message):
     upsert_user(message)
@@ -167,43 +343,62 @@ async def buy(callback: CallbackQuery):
     if active_subscription(callback.from_user.id):
         await callback.message.answer("Você já possui uma assinatura ativa. Use 'Meu acesso' para consultar a validade.", reply_markup=keyboard_menu())
         return
-    payload = f"vip:{callback.from_user.id}:{secrets.token_urlsafe(12)}"
-    await bot.send_invoice(chat_id=callback.from_user.id, title="Acesso VIP — 30 dias", description="Assinatura de acesso digital à área VIP por 30 dias.", payload=payload, currency="XTR", prices=[LabeledPrice(label="Acesso VIP — 30 dias", amount=PRICE_STARS)], provider_token="")
+    await callback.message.answer("<b>Escolha seu acesso</b>\n\nSelecione uma opção abaixo para continuar:", reply_markup=plans_keyboard())
 
 
-@router.pre_checkout_query()
-async def pre_checkout(query: PreCheckoutQuery):
-    if not query.invoice_payload.startswith(f"vip:{query.from_user.id}:"):
-        await query.answer(ok=False, error_message="Pedido inválido. Tente iniciar a compra novamente.")
+@router.callback_query(F.data.startswith("plan:"))
+async def choose_plan(callback: CallbackQuery):
+    await callback.answer()
+    upsert_user(callback.message)
+    plan_key = callback.data.split(":", 1)[1]
+    if plan_key not in PLANS:
+        await callback.message.answer("Opção inválida. Tente novamente.", reply_markup=plans_keyboard())
         return
-    await query.answer(ok=True)
-
-
-@router.message(F.successful_payment)
-async def successful_payment(message: Message):
-    payment = message.successful_payment
+    if active_subscription(callback.from_user.id):
+        await callback.message.answer("Você já possui uma assinatura ativa.", reply_markup=keyboard_menu())
+        return
+    if not configured_pix():
+        log.error("PIX is not fully configured on the server")
+        await callback.message.answer("O pagamento por PIX está temporariamente indisponível. Tente novamente mais tarde.", reply_markup=keyboard_menu())
+        return
+    plan = PLANS[plan_key]
+    await callback.message.answer("⏳ Gerando seu PIX...")
     try:
-        expires = add_subscription(message.from_user.id, payment.telegram_payment_charge_id, payment.invoice_payload)
-    except sqlite3.IntegrityError:
-        await message.answer("Este pagamento já foi processado. Use 'Meu acesso'.", reply_markup=keyboard_menu())
+        order_id, pix_code = await create_pix_order(callback.from_user.id, plan_key)
+    except Exception as exc:
+        log.exception("Could not create PIX order: %s", exc)
+        await callback.message.answer("Não foi possível gerar o PIX agora. Tente novamente em alguns instantes.", reply_markup=plans_keyboard())
         return
-    links = []
-    invite_expiry = now() + timedelta(hours=48)
-    for chat_id in (CHANNEL_ID, GROUP_ID):
-        if not chat_id:
-            continue
-        try:
-            invite = await bot.create_chat_invite_link(chat_id=chat_id, name=f"VIP {message.from_user.id}", expire_date=int(invite_expiry.timestamp()), member_limit=1)
-            save_invite(message.from_user.id, chat_id, invite.invite_link, invite_expiry)
-            links.append(invite.invite_link)
-        except Exception as exc:
-            log.exception("Could not create invite for %s: %s", chat_id, exc)
-    text = f"<b>Pagamento confirmado!</b> ⭐\n\nSeu acesso está válido até <b>{expires.strftime('%d/%m/%Y %H:%M UTC')}</b>.\n\n"
-    if links:
-        text += "<b>Seus links de acesso:</b>\n" + "\n".join(f"• <a href=\"{link}\">Entrar na área VIP</a>" for link in links) + "\n\nNão compartilhe esses links."
+    text = (f"<b>PIX gerado com sucesso</b> ✅\n\n<b>Plano:</b> {plan['label']}\n<b>Valor:</b> R$ {plan['amount_cents']/100:.2f}\n\n<b>Código PIX copia e cola:</b>\n<code>{pix_code}</code>\n\nCopie o código, faça o pagamento no seu banco e depois toque em <b>🔄 Verificar pagamento</b>.")
+    await callback.message.answer(text, reply_markup=pix_keyboard(order_id))
+
+
+@router.callback_query(F.data.startswith("pixcheck:"))
+async def pix_check(callback: CallbackQuery):
+    await callback.answer("Verificando...")
+    order_id = callback.data.split(":", 1)[1]
+    row = get_order(order_id)
+    if not row or row["telegram_id"] != callback.from_user.id:
+        await callback.message.answer("Pagamento não encontrado.", reply_markup=plans_keyboard())
+        return
+    try:
+        status = await verify_order(order_id)
+    except Exception as exc:
+        log.exception("PIX status check failed: %s", exc)
+        await callback.message.answer("Ainda não consegui consultar o pagamento. Tente novamente em alguns segundos.", reply_markup=pix_keyboard(order_id))
+        return
+    if status in ("COMPLETE", "PAID"):
+        await callback.message.answer("Pagamento confirmado. Seu acesso está sendo liberado.", reply_markup=keyboard_menu())
+    elif status in ("FAILED", "CANCELED", "CANCELLED"):
+        await callback.message.answer("Esse PIX não está mais disponível. Gere um novo pagamento.", reply_markup=plans_keyboard())
     else:
-        text += "O pagamento foi registrado, mas os links ainda não estão configurados. Configure CHANNEL_ID/GROUP_ID e fale com o suporte."
-    await message.answer(text, reply_markup=keyboard_menu())
+        await callback.message.answer("Pagamento ainda não identificado. Se você acabou de pagar, aguarde alguns segundos e toque novamente em <b>🔄 Verificar pagamento</b>.", reply_markup=pix_keyboard(order_id))
+
+
+@router.callback_query(F.data == "back")
+async def back(callback: CallbackQuery):
+    await callback.answer()
+    await callback.message.answer(promo_text(), reply_markup=keyboard_menu())
 
 
 @router.callback_query(F.data == "status")
@@ -237,7 +432,8 @@ async def stats(message: Message):
         users = conn.execute("SELECT COUNT(*) c FROM users").fetchone()["c"]
         active = conn.execute("SELECT COUNT(DISTINCT telegram_id) c FROM subscriptions WHERE expires_at > ?", (now().isoformat(),)).fetchone()["c"]
         payments = conn.execute("SELECT COUNT(*) c FROM subscriptions").fetchone()["c"]
-    await message.answer(f"<b>Dashboard</b>\nUsuários: {users}\nAssinaturas ativas: {active}\nPagamentos processados: {payments}")
+        pending = conn.execute("SELECT COUNT(*) c FROM pix_orders WHERE status NOT IN ('COMPLETE','PAID','FAILED','CANCELED','CANCELLED')").fetchone()["c"]
+    await message.answer(f"<b>Dashboard</b>\nUsuários: {users}\nAssinaturas ativas: {active}\nPagamentos processados: {payments}\nPIX pendentes: {pending}")
 
 
 async def cleanup_expired_access():
@@ -281,6 +477,51 @@ async def send_subscription_reminders():
         await asyncio.sleep(3600)
 
 
+async def poll_pending_pix():
+    while True:
+        try:
+            with closing(db()) as conn:
+                rows = conn.execute("SELECT order_id FROM pix_orders WHERE status NOT IN ('COMPLETE','PAID','FAILED','CANCELED','CANCELLED') AND created_at > ? ORDER BY created_at ASC LIMIT 20", ((now() - timedelta(hours=24)).isoformat(),)).fetchall()
+            for row in rows:
+                try:
+                    await verify_order(row["order_id"])
+                except Exception as exc:
+                    log.warning("Pending PIX poll failed for %s: %s", row["order_id"], exc)
+                await asyncio.sleep(0.2)
+        except Exception:
+            log.exception("Pending PIX poller failed")
+        await asyncio.sleep(20)
+
+
+@app.post("/webhooks/ggpix")
+async def ggpix_webhook(request: Request):
+    raw = await request.body()
+    signature = request.headers.get("X-Webhook-Signature", "")
+    if not webhook_signature_valid(raw, signature):
+        return JSONResponse({"ok": False}, status_code=401)
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except Exception:
+        return JSONResponse({"ok": False}, status_code=400)
+    transaction_id = str(data.get("transactionId") or data.get("id") or "")
+    external_id = str(data.get("externalId") or "")
+    status = str(data.get("status") or "").upper()
+    if not external_id and transaction_id:
+        with closing(db()) as conn:
+            row = conn.execute("SELECT order_id FROM pix_orders WHERE transaction_id=?", (transaction_id,)).fetchone()
+        external_id = row["order_id"] if row else ""
+    row = get_order(external_id) if external_id else None
+    if not row:
+        return JSONResponse({"ok": True, "ignored": True})
+    if status:
+        with closing(db()) as conn:
+            conn.execute("UPDATE pix_orders SET status=?, paid_at=CASE WHEN ? IN ('COMPLETE','PAID') THEN COALESCE(paid_at, ?) ELSE paid_at END WHERE order_id=?", (status, status, now().isoformat(), external_id))
+            conn.commit()
+    if status in ("COMPLETE", "PAID"):
+        await deliver_order(external_id)
+    return JSONResponse({"ok": True})
+
+
 @app.get("/")
 async def root():
     return {"service": "vip-telegram-bot", "status": "ok"}
@@ -288,13 +529,14 @@ async def root():
 
 @app.get("/health")
 async def health():
-    return JSONResponse({"status": "ok", "bot": BOT_USERNAME})
+    return JSONResponse({"status": "ok", "bot": BOT_USERNAME, "pix_configured": configured_pix()})
 
 
 async def bot_runner():
     await bot.delete_webhook(drop_pending_updates=False)
     asyncio.create_task(cleanup_expired_access())
     asyncio.create_task(send_subscription_reminders())
+    asyncio.create_task(poll_pending_pix())
     log.info("Bot started as @%s", BOT_USERNAME)
     await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
 
