@@ -19,7 +19,7 @@ logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("hot-bot")
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
-BOT_USERNAME = os.getenv("BOT_USERNAME", "porno_sexy_bot").strip().lstrip("@")
+BOT_USERNAME = os.getenv("BOT_USERNAME", "hotvip_oficial_bot").strip().lstrip("@")
 CHANNEL_ID = os.getenv("CHANNEL_ID", "").strip()
 GROUP_ID = os.getenv("GROUP_ID", "").strip()
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0") or 0)
@@ -39,7 +39,7 @@ router = Router()
 dp = Dispatcher()
 dp.include_router(router)
 bot = Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
-app = FastAPI(title="HOT Telegram Bot")
+app = FastAPI(title="VIP Telegram Bot")
 
 
 def now() -> datetime:
@@ -104,14 +104,26 @@ def keyboard_menu() -> InlineKeyboardMarkup:
 
 
 def promo_text() -> str:
-    return ("<b>🔥 VOCÊ ESTÁ A UM CLIQUE DO CONTEÚDO EXCLUSIVO VIP</b>\n\n"
-            "🟢 <b>Condição especial de lançamento</b>\n\n"
-            "✨ Conteúdo exclusivo para adultos\n"
-            "🎬 Atualizações frequentes\n"
-            "🔒 Área privada para assinantes\n"
-            "⚡ Acesso liberado após a confirmação do pagamento\n\n"
-            "🎁 <b>Bônus e novidades para assinantes</b>\n\n"
-            "⚠️ Serviço destinado exclusivamente a maiores de 18 anos.")
+    return ("<b>🔥 VOCÊ ESTÁ A UM CLIQUE DO CONTEÚDO VIP EXCLUSIVO</b> 😈\n\n"
+            "🟢 <b>OFERTA ESPECIAL DE LANÇAMENTO</b>\n\n"
+            "🌸 Criadoras adultas\n"
+            "⭐ Conteúdo exclusivo\n"
+            "🎥 Vídeos e atualizações frequentes\n"
+            "💋 Conteúdo sensual para maiores de 18\n"
+            "🔥 Conteúdo premium e novidades\n"
+            "🔒 Área privada para assinantes\n\n"
+            "🎁 <b>BÔNUS IMEDIATO APÓS A COMPRA</b>\n"
+            "• Novidades exclusivas\n"
+            "• Conteúdo premium adicional\n"
+            "• Atualizações para assinantes\n"
+            "• Acesso a materiais exclusivos\n\n"
+            "🌶️ <b>Conteúdo atualizado regularmente</b> ✅\n"
+            "🌶️ <b>Área VIP privada</b> ✅\n"
+            "🌶️ <b>Acesso liberado após o pagamento</b> ✅\n"
+            "🌶️ <b>Novidades frequentes</b> ✅\n\n"
+            "⚠️ <b>SERVIÇO EXCLUSIVO PARA MAIORES DE 18 ANOS.</b>\n\n"
+            "🚨 <b>ÚLTIMAS VAGAS DA OFERTA ESPECIAL</b>\n"
+            "<i>Entre agora e aproveite o acesso VIP.</i>")
 
 
 def support_text() -> str:
@@ -232,7 +244,7 @@ async def cleanup_expired_access():
 
 @app.get("/")
 async def root():
-    return {"service": "hot-telegram-bot", "status": "ok"}
+    return {"service": "vip-telegram-bot", "status": "ok"}
 
 
 @app.get("/health")
