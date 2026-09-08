@@ -1,0 +1,34 @@
+name: Set Telegram command suggestions
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Add bot command registration
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('sitecustomize.py')
+          s = p.read_text(encoding='utf-8')
+          marker = '                main.get_order = _recovered_get_order\n'
+          addition = '''                main.get_order = _recovered_get_order\n\n                # Register only the commands that should appear when the user types "/".\n                await main.bot.set_my_commands([\n                    main.BotCommand(command="assinar", description="Assinar acesso VIP"),\n                    main.BotCommand(command="meuacesso", description="Meu acesso"),\n                ])\n'''
+          if 'await main.bot.set_my_commands([' in s:
+              raise SystemExit('Commands already configured')
+          if marker not in s:
+              raise SystemExit('Insertion marker not found')
+          p.write_text(s.replace(marker, addition, 1), encoding='utf-8')
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add sitecustomize.py
+          git commit -m 'Configure Telegram command suggestions'
+          git push
+      - name: Remove temporary workflow
+        run: |
+          git rm .github/workflows/set_bot_commands.yml
+          git commit -m 'Remove temporary command workflow'
+          git push
