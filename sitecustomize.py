@@ -188,6 +188,12 @@ try:
 
                 main.get_order = _recovered_get_order
 
+                # Register only the commands that should appear when the user types "/".
+                await main.bot.set_my_commands([
+                    main.BotCommand(command="assinar", description="Assinar acesso VIP"),
+                    main.BotCommand(command="meuacesso", description="Meu acesso"),
+                ])
+
                 async def _disabled_background_loop():
                     return None
 
