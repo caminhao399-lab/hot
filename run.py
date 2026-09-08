@@ -37,6 +37,52 @@ Dispatcher.start_polling = start_webhook
 import app.main as main  # noqa: E402
 
 
+# The reminder text already configured in app.main is kept unchanged.
+# Keep its existing first-reminder delay (1 day), then resend it every 30 minutes
+# until the user subscribes. This task is independent of PIX generation/status.
+async def repeating_subscription_reminders():
+    while True:
+        try:
+            current = main.now()
+            first_reminder_cutoff = current - main.timedelta(days=1)
+            repeat_cutoff = current - main.timedelta(minutes=30)
+            with main.closing(main.db()) as conn:
+                rows = conn.execute(
+                    "SELECT u.telegram_id FROM users u "
+                    "LEFT JOIN reminders r ON r.telegram_id=u.telegram_id "
+                    "WHERE u.updated_at <= ? "
+                    "AND (r.telegram_id IS NULL OR r.sent_at <= ?)",
+                    (first_reminder_cutoff.isoformat(), repeat_cutoff.isoformat()),
+                ).fetchall()
+
+            for row in rows:
+                user_id = row["telegram_id"]
+                if main.active_subscription(user_id):
+                    continue
+                try:
+                    await main.bot.send_message(
+                        user_id,
+                        main.reminder_text(),
+                        reply_markup=main.keyboard_menu(),
+                    )
+                    with main.closing(main.db()) as conn:
+                        conn.execute(
+                            "INSERT OR REPLACE INTO reminders(telegram_id, sent_at) VALUES(?,?)",
+                            (user_id, main.now().isoformat()),
+                        )
+                        conn.commit()
+                except Exception as exc:
+                    print(f"Could not send reminder to {user_id}: {exc}")
+        except Exception as exc:
+            print(f"Reminder task failed: {exc}")
+        await asyncio.sleep(1800)
+
+
+@main.app.on_event("startup")
+async def start_repeating_subscription_reminders():
+    asyncio.create_task(repeating_subscription_reminders())
+
+
 @main.app.post(WEBHOOK_PATH)
 async def telegram_webhook(request: Request):
     if WEBHOOK_SECRET and request.headers.get("X-Telegram-Bot-Api-Secret-Token") != WEBHOOK_SECRET:
