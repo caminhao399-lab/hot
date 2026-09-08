@@ -201,3 +201,53 @@ try:
         FastAPI.__init__ = _fastapi_init_with_telegram_webhook
 except Exception as _exc:
     print(f"Telegram webhook runtime patch unavailable: {_exc}")
+
+# Message-only compatibility patch: split the legacy combined PIX message into
+# the exact sequence requested by the checkout UI. This does not create or alter
+# the PIX transaction; it only changes how the already-generated data is displayed.
+try:
+    from aiogram.types import Message
+    import re
+
+    _original_message_answer = getattr(Message.answer, "_hot_split_pix_patch", None)
+    if _original_message_answer is None:
+        _original_message_answer = Message.answer
+
+        async def _answer_split_pix(self, text=None, *args, **kwargs):
+            if isinstance(text, str) and "<b>PIX gerado com sucesso</b>" in text and "<b>Código PIX copia e cola:</b>" in text:
+                match = re.search(r"<code>(.*?)</code>", text, re.S)
+                pix_code = match.group(1) if match else ""
+                plan_match = re.search(r"<b>Plano:</b>\s*(.*?)\n<b>Valor:</b>", text, re.S)
+                value_match = re.search(r"<b>Valor:</b>\s*(.*?)\n", text, re.S)
+
+                first = "<b>PIX gerado com sucesso</b> ✅"
+                if plan_match and value_match:
+                    first += f"\n\n<b>Plano:</b> {plan_match.group(1)}\n<b>Valor:</b> {value_match.group(1)}"
+
+                await _original_message_answer(self, first, *args, reply_markup=None, **kwargs)
+                await _original_message_answer(
+                    self,
+                    "✅ <b>Como realizar o pagamento:</b>\n\n"
+                    "1. Abra o aplicativo do seu banco.\n"
+                    "2. Selecione a opção <b>\"Pagar\"</b> ou <b>\"PIX\"</b>.\n"
+                    "3. Escolha <b>\"PIX Copia e Cola\"</b>.\n"
+                    "4. Cole a chave que está na mensagem abaixo e finalize o pagamento com segurança.",
+                    *args,
+                    reply_markup=None,
+                    **kwargs,
+                )
+                await _original_message_answer(self, "Copie o código abaixo:", *args, reply_markup=None, **kwargs)
+                await _original_message_answer(self, pix_code, *args, reply_markup=None, **kwargs)
+                await _original_message_answer(
+                    self,
+                    "Após efetuar o pagamento, clique no botão abaixo 👇",
+                    *args,
+                    **kwargs,
+                )
+                return None
+            return await _original_message_answer(self, text, *args, **kwargs)
+
+        _answer_split_pix._hot_split_pix_patch = True
+        Message.answer = _answer_split_pix
+except Exception as _exc:
+    print(f"PIX message display patch unavailable: {_exc}")
