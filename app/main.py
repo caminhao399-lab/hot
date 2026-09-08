@@ -31,11 +31,30 @@ SUPPORT_USERNAME = os.getenv("SUPPORT_USERNAME", "").strip().lstrip("@")
 VIDEO_FILE_ID = os.getenv("VIDEO_FILE_ID", "").strip()
 DB_PATH = os.getenv("DB_PATH", "/tmp/hot_bot.sqlite3")
 
-# PIX configuration. Identity data is now collected from the customer at checkout.
-GGPIX_API_KEY = os.getenv("GGPIX_API_KEY", "").strip()
-GGPIX_BASE_URL = os.getenv("GGPIX_BASE_URL", "https://ggpixapi.com/api/v1").strip().rstrip("/")
-PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "https://hot-1-ih2f.onrender.com").strip().rstrip("/")
-GGPIX_WEBHOOK_SECRET = os.getenv("GGPIX_WEBHOOK_SECRET", "").strip()
+# BravoPay PIX configuration. Keep the API key only in Render environment variables.
+BRAVOPAY_API_KEY = os.getenv("BRAVOPAY_API_KEY", "").strip()
+BRAVOPAY_BASE_URL = os.getenv("BRAVOPAY_BASE_URL", "https://bravopay.club/api/v1").strip().rstrip("/")
+BRAVOPAY_WEBHOOK_SECRET = os.getenv("BRAVOPAY_WEBHOOK_SECRET", "").strip()
+
+# Optional real BravoPay product IDs. Set these only if UTMify/product attribution is used.
+BRAVOPAY_PRODUCT_IDS = {
+    "essential": os.getenv("BRAVOPAY_PRODUCT_ID_ESSENTIAL", "").strip(),
+    "premium": os.getenv("BRAVOPAY_PRODUCT_ID_PREMIUM", "").strip(),
+    "acervo": os.getenv("BRAVOPAY_PRODUCT_ID_ACERVO", "").strip(),
+    "full": os.getenv("BRAVOPAY_PRODUCT_ID_FULL", "").strip(),
+}
+
+# Optional UTM defaults for traffic that reaches the Telegram bot without browser URL parameters.
+DEFAULT_UTM = {
+    "source": os.getenv("UTM_SOURCE", "").strip(),
+    "medium": os.getenv("UTM_MEDIUM", "").strip(),
+    "campaign": os.getenv("UTM_CAMPAIGN", "").strip(),
+    "content": os.getenv("UTM_CONTENT", "").strip(),
+    "term": os.getenv("UTM_TERM", "").strip(),
+    "fbclid": os.getenv("UTM_FBCLID", "").strip(),
+    "ttclid": os.getenv("UTM_TTCLID", "").strip(),
+    "gclid": os.getenv("UTM_GCLID", "").strip(),
+}
 
 PLANS = {
     "essential": {"label": "VIP Essencial", "amount_cents": 800, "days": 30},
@@ -191,7 +210,7 @@ def support_text() -> str:
 
 
 def configured_pix() -> bool:
-    return bool(GGPIX_API_KEY)
+    return bool(BRAVOPAY_API_KEY)
 
 
 def order_payload(order_id: str) -> str:
@@ -241,11 +260,14 @@ def valid_document(value: str) -> bool:
     return valid_cpf(document) or valid_cnpj(document)
 
 
-async def ggpix_request(method: str, path: str, payload=None):
-    headers = {"X-API-Key": GGPIX_API_KEY, "Accept": "application/json"}
+async def bravopay_request(method: str, path: str, payload=None):
+    headers = {
+        "Authorization": f"Bearer {BRAVOPAY_API_KEY}",
+        "Accept": "application/json",
+    }
     if payload is not None:
         headers["Content-Type"] = "application/json"
-    url = f"{GGPIX_BASE_URL}{path}"
+    url = f"{BRAVOPAY_BASE_URL}{path}"
     timeout = aiohttp.ClientTimeout(total=25)
     async with aiohttp.ClientSession(timeout=timeout) as session:
         async with session.request(method, url, headers=headers, json=payload) as response:
@@ -255,9 +277,16 @@ async def ggpix_request(method: str, path: str, payload=None):
             except json.JSONDecodeError:
                 data = {"raw": raw[:1000]}
             if response.status >= 400:
-                log.error("PIX provider HTTP %s: %s", response.status, data)
-                raise RuntimeError(f"PIX HTTP {response.status}")
+                log.error("BravoPay HTTP %s: %s", response.status, data)
+                message = data.get("error", {}).get("message") if isinstance(data.get("error"), dict) else None
+                raise RuntimeError(f"BravoPay HTTP {response.status}: {message or 'request failed'}")
             return data
+
+
+def build_utm():
+    # The Telegram bot has no browser URL query string. If campaign values are supplied
+    # in Render, they are forwarded to BravoPay exactly as documented by the provider.
+    return {key: value for key, value in DEFAULT_UTM.items() if value}
 
 
 async def create_pix_order(user_id: int, plan_key: str, payer_name: str, payer_document: str):
@@ -266,30 +295,54 @@ async def create_pix_order(user_id: int, plan_key: str, payer_name: str, payer_d
     plan = PLANS[plan_key]
     order_id = secrets.token_urlsafe(18)
     payload = {
-        "amountCents": int(plan["amount_cents"]),
+        "amount_cents": int(plan["amount_cents"]),
+        "method": "pix",
+        "customer": {
+            "name": payer_name,
+            "cpf": normalize_document(payer_document),
+        },
         "description": f"Acesso VIP - {plan['label']}",
-        "payerName": payer_name,
-        "payerDocument": normalize_document(payer_document),
-        "externalId": order_id,
-        "webhookUrl": f"{PUBLIC_BASE_URL}/webhooks/ggpix",
-        "metadata": {"telegramUserId": str(user_id), "plan": plan_key},
+        "external_reference": order_id,
+        "metadata": {
+            "telegram_user_id": str(user_id),
+            "plan": plan_key,
+        },
+        "expires_in": 3600,
     }
-    data = await ggpix_request("POST", "/pix/in", payload)
-    transaction_id = str(data.get("id") or data.get("transactionId") or "")
-    pix_copy = data.get("pixCopyPaste") or data.get("pixCode") or ""
+    product_id = BRAVOPAY_PRODUCT_IDS.get(plan_key)
+    if product_id:
+        payload["product_id"] = product_id
+    utm = build_utm()
+    if utm:
+        payload["utm"] = utm
+
+    data = await bravopay_request("POST", "/transactions", payload)
+    transaction_id = str(data.get("id") or "")
+    pix = data.get("pix") or {}
+    pix_copy = str(pix.get("copy_paste") or "")
     if not transaction_id or not pix_copy:
-        log.error("PIX response missing transaction id/code")
-        raise RuntimeError("PIX_INVALID_RESPONSE")
+        log.error("BravoPay response missing transaction id or PIX code")
+        raise RuntimeError("BRAVOPAY_INVALID_RESPONSE")
+
     with closing(db()) as conn:
         conn.execute("""INSERT INTO pix_orders
             (order_id, telegram_id, plan_key, transaction_id, status, amount_cents, pix_code, created_at)
-            VALUES(?,?,?,?,?,?,?,?)""", (order_id, user_id, plan_key, transaction_id, str(data.get("status") or "PENDING").upper(), int(plan["amount_cents"]), pix_copy, now().isoformat()))
+            VALUES(?,?,?,?,?,?,?,?)""", (
+                order_id,
+                user_id,
+                plan_key,
+                transaction_id,
+                str(data.get("status") or "PENDING").upper(),
+                int(plan["amount_cents"]),
+                pix_copy,
+                now().isoformat(),
+            ))
         conn.commit()
     return order_id, pix_copy
 
 
 async def get_pix_status(transaction_id: str):
-    return await ggpix_request("GET", f"/transactions/{transaction_id}")
+    return await bravopay_request("GET", f"/transactions/{transaction_id}")
 
 
 def get_order(order_id: str):
@@ -301,7 +354,7 @@ async def deliver_order(order_id: str):
     row = get_order(order_id)
     if not row or row["delivered_at"]:
         return
-    if str(row["status"]).upper() not in ("COMPLETE", "PAID"):
+    if str(row["status"]).upper() != "PAID":
         return
     user_id = row["telegram_id"]
     plan = PLANS[row["plan_key"]]
@@ -338,27 +391,38 @@ async def verify_order(order_id: str):
     row = get_order(order_id)
     if not row:
         return "NOT_FOUND"
-    if str(row["status"]).upper() in ("COMPLETE", "PAID"):
+    if str(row["status"]).upper() == "PAID":
         await deliver_order(order_id)
         return row["status"]
     data = await get_pix_status(row["transaction_id"])
     status = str(data.get("status") or "").upper()
     if status:
         with closing(db()) as conn:
-            conn.execute("UPDATE pix_orders SET status=?, paid_at=CASE WHEN ? IN ('COMPLETE','PAID') THEN COALESCE(paid_at, ?) ELSE paid_at END WHERE order_id=?", (status, status, now().isoformat(), order_id))
+            conn.execute("UPDATE pix_orders SET status=?, paid_at=CASE WHEN ?='PAID' THEN COALESCE(paid_at, ?) ELSE paid_at END WHERE order_id=?", (status, status, now().isoformat(), order_id))
             conn.commit()
-    if status in ("COMPLETE", "PAID"):
+    if status == "PAID":
         await deliver_order(order_id)
     return status or "UNKNOWN"
 
 
 def webhook_signature_valid(raw_body: bytes, signature: str) -> bool:
-    if not GGPIX_WEBHOOK_SECRET:
-        return True
-    expected = hmac.new(GGPIX_WEBHOOK_SECRET.encode(), raw_body, hashlib.sha256).hexdigest()
-    received = signature.strip()
-    if received.startswith("sha256="):
-        received = received[7:]
+    if not BRAVOPAY_WEBHOOK_SECRET:
+        return False
+    try:
+        parts = dict(item.split("=", 1) for item in signature.strip().split(",") if "=" in item)
+        timestamp = int(parts.get("t", "0"))
+        received = parts.get("v1", "")
+    except Exception:
+        return False
+    if not timestamp or not received:
+        return False
+    if abs(int(now().timestamp()) - timestamp) > 300:
+        return False
+    expected = hmac.new(
+        BRAVOPAY_WEBHOOK_SECRET.encode(),
+        f"{timestamp}.".encode() + raw_body,
+        hashlib.sha256,
+    ).hexdigest()
     return hmac.compare_digest(expected, received)
 
 
@@ -402,7 +466,7 @@ async def choose_plan(callback: CallbackQuery):
         await callback.message.answer("Você já possui uma assinatura ativa.", reply_markup=keyboard_menu())
         return
     if not configured_pix():
-        log.error("PIX is not configured on the server")
+        log.error("BravoPay is not configured on the server")
         await callback.message.answer("O pagamento por PIX está temporariamente indisponível. Tente novamente mais tarde.", reply_markup=keyboard_menu())
         return
     pending_payer[callback.from_user.id] = {"plan_key": plan_key, "step": "name"}
@@ -417,7 +481,7 @@ async def stats(message: Message):
         users = conn.execute("SELECT COUNT(*) c FROM users").fetchone()["c"]
         active = conn.execute("SELECT COUNT(DISTINCT telegram_id) c FROM subscriptions WHERE expires_at > ?", (now().isoformat(),)).fetchone()["c"]
         payments = conn.execute("SELECT COUNT(*) c FROM subscriptions").fetchone()["c"]
-        pending = conn.execute("SELECT COUNT(*) c FROM pix_orders WHERE status NOT IN ('COMPLETE','PAID','FAILED','CANCELED','CANCELLED')").fetchone()["c"]
+        pending = conn.execute("SELECT COUNT(*) c FROM pix_orders WHERE status NOT IN ('PAID','FAILED','EXPIRED','REFUNDED','CANCELED','CHARGEBACK')").fetchone()["c"]
     await message.answer(f"<b>Dashboard</b>\nUsuários: {users}\nAssinaturas ativas: {active}\nPagamentos processados: {payments}\nPIX pendentes: {pending}")
 
 
@@ -449,7 +513,7 @@ async def collect_payer_details(message: Message):
         try:
             order_id, pix_code = await create_pix_order(user_id, plan_key, payer_name, document)
         except Exception as exc:
-            log.exception("Could not create PIX order: %s", exc)
+            log.exception("Could not create BravoPay PIX order: %s", exc)
             await message.answer("Não foi possível gerar o PIX agora. Tente novamente em alguns instantes.", reply_markup=plans_keyboard())
             return
         text_out = (f"<b>PIX gerado com sucesso</b> ✅\n\n<b>Plano:</b> {plan['label']}\n<b>Valor:</b> R$ {plan['amount_cents']/100:.2f}\n\n<b>Código PIX copia e cola:</b>\n<code>{pix_code}</code>\n\nCopie o código, faça o pagamento no seu banco e depois toque em <b>🔄 Verificar pagamento</b>.")
@@ -467,12 +531,12 @@ async def pix_check(callback: CallbackQuery):
     try:
         status = await verify_order(order_id)
     except Exception as exc:
-        log.exception("PIX status check failed: %s", exc)
+        log.exception("BravoPay status check failed: %s", exc)
         await callback.message.answer("Ainda não consegui consultar o pagamento. Tente novamente em alguns segundos.", reply_markup=pix_keyboard(order_id))
         return
-    if status in ("COMPLETE", "PAID"):
+    if status == "PAID":
         await callback.message.answer("Pagamento confirmado. Seu acesso está sendo liberado.", reply_markup=keyboard_menu())
-    elif status in ("FAILED", "CANCELED", "CANCELLED"):
+    elif status in ("FAILED", "EXPIRED", "CANCELED", "REFUNDED", "CHARGEBACK"):
         await callback.message.answer("Esse PIX não está mais disponível. Gere um novo pagamento.", reply_markup=plans_keyboard())
     else:
         await callback.message.answer("Pagamento ainda não identificado. Se você acabou de pagar, aguarde alguns segundos e toque novamente em <b>🔄 Verificar pagamento</b>.", reply_markup=pix_keyboard(order_id))
@@ -553,45 +617,61 @@ async def poll_pending_pix():
     while True:
         try:
             with closing(db()) as conn:
-                rows = conn.execute("SELECT order_id FROM pix_orders WHERE status NOT IN ('COMPLETE','PAID','FAILED','CANCELED','CANCELLED') AND created_at > ? ORDER BY created_at ASC LIMIT 20", ((now() - timedelta(hours=24)).isoformat(),)).fetchall()
+                rows = conn.execute("SELECT order_id FROM pix_orders WHERE status NOT IN ('PAID','FAILED','EXPIRED','REFUNDED','CANCELED','CHARGEBACK') AND created_at > ? ORDER BY created_at ASC LIMIT 20", ((now() - timedelta(hours=24)).isoformat(),)).fetchall()
             for row in rows:
                 try:
                     await verify_order(row["order_id"])
                 except Exception as exc:
-                    log.warning("Pending PIX poll failed for %s: %s", row["order_id"], exc)
+                    log.warning("Pending BravoPay PIX poll failed for %s: %s", row["order_id"], exc)
                 await asyncio.sleep(0.2)
         except Exception:
             log.exception("Pending PIX poller failed")
         await asyncio.sleep(20)
 
 
-@app.post("/webhooks/ggpix")
-async def ggpix_webhook(request: Request):
+@app.post("/webhooks/bravopay")
+async def bravopay_webhook(request: Request):
     raw = await request.body()
-    signature = request.headers.get("X-Webhook-Signature", "")
+    signature = request.headers.get("BravoPay-Signature") or request.headers.get("X-Bravopay-Signature") or ""
     if not webhook_signature_valid(raw, signature):
         return JSONResponse({"ok": False}, status_code=401)
     try:
-        data = json.loads(raw.decode("utf-8"))
+        envelope = json.loads(raw.decode("utf-8"))
     except Exception:
         return JSONResponse({"ok": False}, status_code=400)
-    transaction_id = str(data.get("transactionId") or data.get("id") or "")
-    external_id = str(data.get("externalId") or "")
-    status = str(data.get("status") or "").upper()
+
+    event_id = str(envelope.get("id") or "")
+    event_type = str(envelope.get("type") or "")
+    transaction = envelope.get("data") if isinstance(envelope.get("data"), dict) else {}
+    transaction_id = str(transaction.get("id") or "")
+    external_id = str(transaction.get("external_reference") or "")
     if not external_id and transaction_id:
         with closing(db()) as conn:
             row = conn.execute("SELECT order_id FROM pix_orders WHERE transaction_id=?", (transaction_id,)).fetchone()
         external_id = row["order_id"] if row else ""
     row = get_order(external_id) if external_id else None
     if not row:
-        return JSONResponse({"ok": True, "ignored": True})
+        return JSONResponse({"ok": True, "ignored": True, "event_id": event_id})
+
+    status = str(transaction.get("status") or "").upper()
+    if event_type == "transaction.paid" or status == "PAID":
+        status = "PAID"
+    elif event_type == "transaction.expired":
+        status = "EXPIRED"
+    elif event_type == "transaction.failed":
+        status = "FAILED"
+    elif event_type == "transaction.refunded":
+        status = "REFUNDED"
+    elif event_type == "transaction.chargeback":
+        status = "CHARGEBACK"
+
     if status:
         with closing(db()) as conn:
-            conn.execute("UPDATE pix_orders SET status=?, paid_at=CASE WHEN ? IN ('COMPLETE','PAID') THEN COALESCE(paid_at, ?) ELSE paid_at END WHERE order_id=?", (status, status, now().isoformat(), external_id))
+            conn.execute("UPDATE pix_orders SET status=?, paid_at=CASE WHEN ?='PAID' THEN COALESCE(paid_at, ?) ELSE paid_at END WHERE order_id=?", (status, status, now().isoformat(), external_id))
             conn.commit()
-    if status in ("COMPLETE", "PAID"):
+    if status == "PAID":
         await deliver_order(external_id)
-    return JSONResponse({"ok": True})
+    return JSONResponse({"ok": True, "event_id": event_id})
 
 
 @app.get("/")
