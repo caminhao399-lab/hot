@@ -15,7 +15,7 @@ from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.filters import Command, CommandStart
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import BotCommand, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
@@ -597,6 +597,11 @@ async def health():
 
 async def bot_runner():
     await bot.delete_webhook(drop_pending_updates=False)
+    await bot.set_my_commands([
+        BotCommand(command="start", description="Iniciar"),
+        BotCommand(command="assinar", description="Assinar acesso VIP"),
+        BotCommand(command="meuacesso", description="Consultar meu acesso"),
+    ])
     asyncio.create_task(cleanup_expired_access())
     asyncio.create_task(send_subscription_reminders())
     asyncio.create_task(poll_pending_pix())
@@ -604,14 +609,28 @@ async def bot_runner():
     await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
 
 
-@app.on_event("startup")
-async def startup():
-    asyncio.create_task(bot_runner())
+@router.message(Command("assinar"))
+async def command_assinar(message: Message):
+    upsert_user(message)
+    if active_subscription(message.from_user.id):
+        await message.answer("Você já possui uma assinatura ativa.", reply_markup=keyboard_menu())
+        return
+    await message.answer("<b>Escolha seu acesso</b>\n\nSelecione uma opção abaixo para continuar:", reply_markup=plans_keyboard())
 
 
-@app.on_event("shutdown")
-async def shutdown():
-    await bot.session.close()
+@router.message(Command("meuacesso"))
+async def command_meuacesso(message: Message):
+    upsert_user(message)
+    with closing(db()) as conn:
+        row = conn.execute("SELECT expires_at FROM subscriptions WHERE telegram_id=? ORDER BY expires_at DESC LIMIT 1", (message.from_user.id,)).fetchone()
+    if not row:
+        await message.answer("Você ainda não possui uma assinatura.", reply_markup=keyboard_menu())
+        return
+    expires = datetime.fromisoformat(row["expires_at"])
+    if expires <= now():
+        await message.answer("Sua assinatura expirou. Você pode contratar um novo período.", reply_markup=keyboard_menu())
+        return
+    await message.answer(f"<b>Seu acesso está ativo.</b>\n\nValidade: {expires.strftime('%d/%m/%Y %H:%M UTC')}\nTempo restante: aproximadamente {(expires-now()).days} dia(s).", reply_markup=keyboard_menu())
 
 
 if __name__ == "__main__":
