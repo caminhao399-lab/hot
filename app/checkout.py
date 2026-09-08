@@ -1,8 +1,9 @@
 import os
+import re
 import uuid
 import aiohttp
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel
 
 router = APIRouter(prefix="/api/checkout")
 BASE = os.getenv("BRAVOPAY_BASE_URL", "https://bravopay.club/api/v1").rstrip("/")
@@ -15,11 +16,13 @@ PLANS = {
     "full": {"name": "Acesso Full + Bônus", "amount": 2390, "product": os.getenv("BRAVOPAY_PRODUCT_ID_FULL", "").strip()},
 }
 
+
 class Customer(BaseModel):
     name: str
-    email: EmailStr
+    email: str
     phone: str
     cpf: str
+
 
 class CheckoutRequest(BaseModel):
     plan: str
@@ -29,6 +32,10 @@ class CheckoutRequest(BaseModel):
 
 def digits(value: str) -> str:
     return "".join(c for c in value if c.isdigit())
+
+
+def valid_email(value: str) -> bool:
+    return bool(re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", value.strip()))
 
 
 async def bravopay(method: str, endpoint: str, payload=None):
@@ -45,9 +52,9 @@ async def bravopay(method: str, endpoint: str, payload=None):
             except Exception:
                 data = {"raw": raw[:1000]}
             if response.status >= 400:
-                # Nunca registra a chave.
-                print(f"BravoPay HTTP {response.status}: {data}")
-                raise HTTPException(502, "A BravoPay recusou a cobrança. Confira a API Key no Render.")
+                # Nunca registra a chave ou os dados do cliente.
+                print(f"BravoPay HTTP {response.status}")
+                raise HTTPException(502, "A BravoPay recusou a cobrança. Confira a configuração do pagamento no Render.")
             return data
 
 
@@ -56,7 +63,16 @@ async def create_payment(req: CheckoutRequest):
     plan = PLANS.get(req.plan)
     if not plan:
         raise HTTPException(400, "Plano inválido.")
+    name = req.customer.name.strip()
+    email = req.customer.email.strip()
+    phone = req.customer.phone.strip()
     document = digits(req.customer.cpf)
+    if len(name) < 3:
+        raise HTTPException(400, "Nome inválido.")
+    if not valid_email(email):
+        raise HTTPException(400, "E-mail inválido.")
+    if len(digits(phone)) < 10:
+        raise HTTPException(400, "Telefone inválido.")
     if len(document) not in (11, 14):
         raise HTTPException(400, "CPF/CNPJ inválido.")
 
@@ -64,9 +80,9 @@ async def create_payment(req: CheckoutRequest):
         "amount_cents": plan["amount"],
         "method": "pix",
         "customer": {
-            "name": req.customer.name.strip(),
-            "email": str(req.customer.email),
-            "phone": req.customer.phone.strip(),
+            "name": name,
+            "email": email,
+            "phone": phone,
             "cpf": document,
         },
         "external_reference": f"checkout_{uuid.uuid4().hex}",
@@ -85,7 +101,12 @@ async def create_payment(req: CheckoutRequest):
     code = pix.get("copy_paste")
     if not code:
         raise HTTPException(502, "A BravoPay não retornou pix.copy_paste.")
-    return {"success": True, "transaction_id": data.get("id"), "status": data.get("status"), "pix": {"copy_paste": code, "expires_at": pix.get("expires_at")}}
+    return {
+        "success": True,
+        "transaction_id": data.get("id"),
+        "status": data.get("status"),
+        "pix": {"copy_paste": code, "expires_at": pix.get("expires_at")},
+    }
 
 
 @router.get("/status/{transaction_id}")
