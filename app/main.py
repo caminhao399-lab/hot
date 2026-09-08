@@ -143,8 +143,6 @@ def save_invite(user_id: int, chat_id: str, link: str, expires: datetime):
 def keyboard_menu() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="⭐ Assinar acesso VIP", callback_data="buy")],
-        [InlineKeyboardButton(text="📅 Meu acesso", callback_data="status")],
-        [InlineKeyboardButton(text="ℹ️ Regras e suporte", callback_data="support")],
     ])
 
 
