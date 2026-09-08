@@ -9,6 +9,7 @@ import sqlite3
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from urllib.parse import quote
 
 import aiohttp
 from aiogram import Bot, Dispatcher, F, Router
@@ -293,6 +294,53 @@ def get_order(order_id: str):
         return conn.execute("SELECT * FROM pix_orders WHERE order_id=?", (order_id,)).fetchone()
 
 
+async def recover_order_from_bravopay(order_id: str, telegram_id: int):
+    """Recover a local PIX order after a Render restart/redeploy.
+
+    The PIX transaction is not recreated. BravoPay is queried using the same
+    external_reference that was assigned when the original PIX was created.
+    """
+    data = await bravopay_request(
+        "GET",
+        f"/transactions?external_reference={quote(order_id, safe='')}&limit=1",
+    )
+    items = data.get("data") if isinstance(data, dict) else None
+    if not isinstance(items, list) or not items:
+        return None
+
+    tx = items[0] if isinstance(items[0], dict) else {}
+    metadata = tx.get("metadata") if isinstance(tx.get("metadata"), dict) else {}
+    stored_user_id = str(metadata.get("telegram_user_id") or "")
+    if stored_user_id and stored_user_id != str(telegram_id):
+        return None
+
+    amount_cents = int(tx.get("amount_cents") or 0)
+    plan_key = str(metadata.get("plan") or "")
+    if plan_key not in PLANS:
+        plan_key = next((key for key, plan in PLANS.items() if int(plan["amount_cents"]) == amount_cents), "")
+    if plan_key not in PLANS:
+        return None
+
+    transaction_id = str(tx.get("id") or "")
+    if not transaction_id:
+        return None
+
+    status = str(tx.get("status") or "PENDING").upper()
+    pix = tx.get("pix") if isinstance(tx.get("pix"), dict) else {}
+    pix_code = str(pix.get("copy_paste") or "")
+    created_at = str(tx.get("created_at") or now().isoformat())
+    paid_at = str(tx.get("paid_at") or "") or None
+
+    with closing(db()) as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO pix_orders (order_id, telegram_id, plan_key, transaction_id, status, amount_cents, pix_code, created_at, paid_at) VALUES(?,?,?,?,?,?,?,?,?)",
+            (order_id, telegram_id, plan_key, transaction_id, status, amount_cents, pix_code, created_at, paid_at),
+        )
+        conn.commit()
+    log.info("Recovered PIX order %s from BravoPay after local state loss", order_id)
+    return get_order(order_id)
+
+
 async def deliver_order(order_id: str):
     row = get_order(order_id)
     if not row or row["delivered_at"]:
@@ -437,8 +485,14 @@ async def pix_check(callback: CallbackQuery):
     await callback.answer("Verificando...")
     order_id = callback.data.split(":", 1)[1]
     row = get_order(order_id)
+    if not row:
+        try:
+            row = await recover_order_from_bravopay(order_id, callback.from_user.id)
+        except Exception as exc:
+            log.exception("Could not recover PIX order %s from BravoPay: %s", order_id, exc)
+            row = None
     if not row or row["telegram_id"] != callback.from_user.id:
-        await callback.message.answer("Pagamento não encontrado.", reply_markup=plans_keyboard())
+        await callback.message.answer("Pagamento não encontrado. Tente novamente em alguns segundos.", reply_markup=plans_keyboard())
         return
     try:
         status = await verify_order(order_id)
@@ -561,6 +615,14 @@ async def bravopay_webhook(request: Request):
             row = conn.execute("SELECT order_id FROM pix_orders WHERE transaction_id=?", (transaction_id,)).fetchone()
         external_id = row["order_id"] if row else ""
     row = get_order(external_id) if external_id else None
+    if not row and external_id:
+        metadata = transaction.get("metadata") if isinstance(transaction.get("metadata"), dict) else {}
+        telegram_user_id = str(metadata.get("telegram_user_id") or "")
+        if telegram_user_id.isdigit():
+            try:
+                row = await recover_order_from_bravopay(external_id, int(telegram_user_id))
+            except Exception as exc:
+                log.exception("Could not recover webhook PIX order %s: %s", external_id, exc)
     if not row:
         return JSONResponse({"ok": True, "ignored": True, "event_id": event_id})
 
