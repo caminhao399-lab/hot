@@ -31,15 +31,12 @@ SUPPORT_USERNAME = os.getenv("SUPPORT_USERNAME", "").strip().lstrip("@")
 VIDEO_FILE_ID = os.getenv("VIDEO_FILE_ID", "").strip()
 DB_PATH = os.getenv("DB_PATH", "/tmp/hot_bot.sqlite3")
 
-# PIX configuration. Secrets/identity data are read only from Render environment variables.
+# PIX configuration. Identity data is now collected from the customer at checkout.
 GGPIX_API_KEY = os.getenv("GGPIX_API_KEY", "").strip()
 GGPIX_BASE_URL = os.getenv("GGPIX_BASE_URL", "https://ggpixapi.com/api/v1").strip().rstrip("/")
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "https://hot-1-ih2f.onrender.com").strip().rstrip("/")
-DEFAULT_PAYER_NAME = os.getenv("DEFAULT_PAYER_NAME", "").strip()
-DEFAULT_PAYER_DOCUMENT = os.getenv("DEFAULT_PAYER_DOCUMENT", "").strip()
 GGPIX_WEBHOOK_SECRET = os.getenv("GGPIX_WEBHOOK_SECRET", "").strip()
 
-# Plan catalog shown to customers. Provider name is intentionally never exposed.
 PLANS = {
     "essential": {"label": "VIP Essencial", "amount_cents": 800, "days": 30},
     "premium": {"label": "VIP Premium", "amount_cents": 1490, "days": 30},
@@ -49,7 +46,6 @@ PLANS = {
 
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN is required")
-
 if not CHANNEL_ID:
     log.warning("CHANNEL_ID is not configured yet")
 
@@ -58,6 +54,9 @@ dp = Dispatcher()
 dp.include_router(router)
 bot = Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 app = FastAPI(title="VIP Telegram Bot")
+
+# Temporary checkout data only. Name/document are not written to the database or logs.
+pending_payer = {}
 
 
 def now() -> datetime:
@@ -192,11 +191,54 @@ def support_text() -> str:
 
 
 def configured_pix() -> bool:
-    return bool(GGPIX_API_KEY and DEFAULT_PAYER_NAME and len(DEFAULT_PAYER_DOCUMENT) in (11, 14))
+    return bool(GGPIX_API_KEY)
 
 
 def order_payload(order_id: str) -> str:
     return f"vip:{order_id}"
+
+
+def normalize_document(value: str) -> str:
+    return "".join(ch for ch in value if ch.isdigit())
+
+
+def valid_cpf(value: str) -> bool:
+    cpf = normalize_document(value)
+    if len(cpf) != 11 or cpf == cpf[0] * 11:
+        return False
+    total = sum(int(cpf[i]) * (10 - i) for i in range(9))
+    d1 = (total * 10) % 11
+    if d1 == 10:
+        d1 = 0
+    if d1 != int(cpf[9]):
+        return False
+    total = sum(int(cpf[i]) * (11 - i) for i in range(10))
+    d2 = (total * 10) % 11
+    if d2 == 10:
+        d2 = 0
+    return d2 == int(cpf[10])
+
+
+def valid_cnpj(value: str) -> bool:
+    cnpj = normalize_document(value)
+    if len(cnpj) != 14 or cnpj == cnpj[0] * 14:
+        return False
+    weights1 = [5,4,3,2,9,8,7,6,5,4,3,2]
+    total = sum(int(cnpj[i]) * weights1[i] for i in range(12))
+    d1 = 11 - (total % 11)
+    if d1 >= 10:
+        d1 = 0
+    weights2 = [6,5,4,3,2,9,8,7,6,5,4,3,2]
+    total = sum(int(cnpj[i]) * weights2[i] for i in range(13))
+    d2 = 11 - (total % 11)
+    if d2 >= 10:
+        d2 = 0
+    return d1 == int(cnpj[12]) and d2 == int(cnpj[13])
+
+
+def valid_document(value: str) -> bool:
+    document = normalize_document(value)
+    return valid_cpf(document) or valid_cnpj(document)
 
 
 async def ggpix_request(method: str, path: str, payload=None):
@@ -218,7 +260,7 @@ async def ggpix_request(method: str, path: str, payload=None):
             return data
 
 
-async def create_pix_order(user_id: int, plan_key: str):
+async def create_pix_order(user_id: int, plan_key: str, payer_name: str, payer_document: str):
     if not configured_pix():
         raise RuntimeError("PIX_NOT_CONFIGURED")
     plan = PLANS[plan_key]
@@ -226,8 +268,8 @@ async def create_pix_order(user_id: int, plan_key: str):
     payload = {
         "amountCents": int(plan["amount_cents"]),
         "description": f"Acesso VIP - {plan['label']}",
-        "payerName": DEFAULT_PAYER_NAME,
-        "payerDocument": DEFAULT_PAYER_DOCUMENT,
+        "payerName": payer_name,
+        "payerDocument": normalize_document(payer_document),
         "externalId": order_id,
         "webhookUrl": f"{PUBLIC_BASE_URL}/webhooks/ggpix",
         "metadata": {"telegramUserId": str(user_id), "plan": plan_key},
@@ -236,7 +278,7 @@ async def create_pix_order(user_id: int, plan_key: str):
     transaction_id = str(data.get("id") or data.get("transactionId") or "")
     pix_copy = data.get("pixCopyPaste") or data.get("pixCode") or ""
     if not transaction_id or not pix_copy:
-        log.error("PIX response missing transaction id/code: %s", data)
+        log.error("PIX response missing transaction id/code")
         raise RuntimeError("PIX_INVALID_RESPONSE")
     with closing(db()) as conn:
         conn.execute("""INSERT INTO pix_orders
@@ -322,6 +364,7 @@ def webhook_signature_valid(raw_body: bytes, signature: str) -> bool:
 
 @router.message(CommandStart())
 async def start(message: Message):
+    pending_payer.pop(message.from_user.id, None)
     upsert_user(message)
     if VIDEO_FILE_ID:
         await message.answer_video(video=VIDEO_FILE_ID, caption=promo_text(), reply_markup=keyboard_menu())
@@ -339,6 +382,7 @@ async def receive_video(message: Message):
 @router.callback_query(F.data == "buy")
 async def buy(callback: CallbackQuery):
     await callback.answer()
+    pending_payer.pop(callback.from_user.id, None)
     upsert_user(callback.message)
     if active_subscription(callback.from_user.id):
         await callback.message.answer("Você já possui uma assinatura ativa. Use 'Meu acesso' para consultar a validade.", reply_markup=keyboard_menu())
@@ -358,19 +402,58 @@ async def choose_plan(callback: CallbackQuery):
         await callback.message.answer("Você já possui uma assinatura ativa.", reply_markup=keyboard_menu())
         return
     if not configured_pix():
-        log.error("PIX is not fully configured on the server")
+        log.error("PIX is not configured on the server")
         await callback.message.answer("O pagamento por PIX está temporariamente indisponível. Tente novamente mais tarde.", reply_markup=keyboard_menu())
         return
-    plan = PLANS[plan_key]
-    await callback.message.answer("⏳ Gerando seu PIX...")
-    try:
-        order_id, pix_code = await create_pix_order(callback.from_user.id, plan_key)
-    except Exception as exc:
-        log.exception("Could not create PIX order: %s", exc)
-        await callback.message.answer("Não foi possível gerar o PIX agora. Tente novamente em alguns instantes.", reply_markup=plans_keyboard())
+    pending_payer[callback.from_user.id] = {"plan_key": plan_key, "step": "name"}
+    await callback.message.answer("Para gerar seu PIX, informe seu <b>nome completo</b>.")
+
+
+@router.message(Command("stats"))
+async def stats(message: Message):
+    if message.from_user.id != ADMIN_ID:
         return
-    text = (f"<b>PIX gerado com sucesso</b> ✅\n\n<b>Plano:</b> {plan['label']}\n<b>Valor:</b> R$ {plan['amount_cents']/100:.2f}\n\n<b>Código PIX copia e cola:</b>\n<code>{pix_code}</code>\n\nCopie o código, faça o pagamento no seu banco e depois toque em <b>🔄 Verificar pagamento</b>.")
-    await callback.message.answer(text, reply_markup=pix_keyboard(order_id))
+    with closing(db()) as conn:
+        users = conn.execute("SELECT COUNT(*) c FROM users").fetchone()["c"]
+        active = conn.execute("SELECT COUNT(DISTINCT telegram_id) c FROM subscriptions WHERE expires_at > ?", (now().isoformat(),)).fetchone()["c"]
+        payments = conn.execute("SELECT COUNT(*) c FROM subscriptions").fetchone()["c"]
+        pending = conn.execute("SELECT COUNT(*) c FROM pix_orders WHERE status NOT IN ('COMPLETE','PAID','FAILED','CANCELED','CANCELLED')").fetchone()["c"]
+    await message.answer(f"<b>Dashboard</b>\nUsuários: {users}\nAssinaturas ativas: {active}\nPagamentos processados: {payments}\nPIX pendentes: {pending}")
+
+
+@router.message(F.text)
+async def collect_payer_details(message: Message):
+    user_id = message.from_user.id
+    data = pending_payer.get(user_id)
+    if not data:
+        return
+    text = (message.text or "").strip()
+    if data["step"] == "name":
+        if len(text) < 3 or len(text.split()) < 2 or len(text) > 120:
+            await message.answer("Informe seu <b>nome completo</b> para continuar.")
+            return
+        data["payer_name"] = text
+        data["step"] = "document"
+        await message.answer("Agora informe seu <b>CPF ou CNPJ</b> (pode enviar com ou sem pontuação).")
+        return
+    if data["step"] == "document":
+        document = normalize_document(text)
+        if not valid_document(document):
+            await message.answer("CPF/CNPJ inválido. Confira os números e envie novamente.")
+            return
+        plan_key = data["plan_key"]
+        payer_name = data["payer_name"]
+        pending_payer.pop(user_id, None)
+        plan = PLANS[plan_key]
+        await message.answer("⏳ Gerando seu PIX...")
+        try:
+            order_id, pix_code = await create_pix_order(user_id, plan_key, payer_name, document)
+        except Exception as exc:
+            log.exception("Could not create PIX order: %s", exc)
+            await message.answer("Não foi possível gerar o PIX agora. Tente novamente em alguns instantes.", reply_markup=plans_keyboard())
+            return
+        text_out = (f"<b>PIX gerado com sucesso</b> ✅\n\n<b>Plano:</b> {plan['label']}\n<b>Valor:</b> R$ {plan['amount_cents']/100:.2f}\n\n<b>Código PIX copia e cola:</b>\n<code>{pix_code}</code>\n\nCopie o código, faça o pagamento no seu banco e depois toque em <b>🔄 Verificar pagamento</b>.")
+        await message.answer(text_out, reply_markup=pix_keyboard(order_id))
 
 
 @router.callback_query(F.data.startswith("pixcheck:"))
@@ -398,6 +481,7 @@ async def pix_check(callback: CallbackQuery):
 @router.callback_query(F.data == "back")
 async def back(callback: CallbackQuery):
     await callback.answer()
+    pending_payer.pop(callback.from_user.id, None)
     await callback.message.answer(promo_text(), reply_markup=keyboard_menu())
 
 
@@ -422,18 +506,6 @@ async def support(callback: CallbackQuery):
     await callback.answer()
     upsert_user(callback.message)
     await callback.message.answer("<b>Regras e suporte</b>\n\n• Serviço exclusivo para maiores de 18 anos.\n• Não compartilhe links privados.\n• O acesso é pessoal e pode ser revogado em caso de abuso ou violação das regras.\n\n" + support_text(), reply_markup=keyboard_menu())
-
-
-@router.message(Command("stats"))
-async def stats(message: Message):
-    if message.from_user.id != ADMIN_ID:
-        return
-    with closing(db()) as conn:
-        users = conn.execute("SELECT COUNT(*) c FROM users").fetchone()["c"]
-        active = conn.execute("SELECT COUNT(DISTINCT telegram_id) c FROM subscriptions WHERE expires_at > ?", (now().isoformat(),)).fetchone()["c"]
-        payments = conn.execute("SELECT COUNT(*) c FROM subscriptions").fetchone()["c"]
-        pending = conn.execute("SELECT COUNT(*) c FROM pix_orders WHERE status NOT IN ('COMPLETE','PAID','FAILED','CANCELED','CANCELLED')").fetchone()["c"]
-    await message.answer(f"<b>Dashboard</b>\nUsuários: {users}\nAssinaturas ativas: {active}\nPagamentos processados: {payments}\nPIX pendentes: {pending}")
 
 
 async def cleanup_expired_access():
