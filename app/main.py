@@ -11,14 +11,7 @@ from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.filters import Command, CommandStart
-from aiogram.types import (
-    CallbackQuery,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-    LabeledPrice,
-    Message,
-    PreCheckoutQuery,
-)
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice, Message, PreCheckoutQuery
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
@@ -33,6 +26,7 @@ ADMIN_ID = int(os.getenv("ADMIN_ID", "0") or 0)
 PRICE_STARS = int(os.getenv("PRICE_STARS", "100") or 100)
 SUBSCRIPTION_DAYS = int(os.getenv("SUBSCRIPTION_DAYS", "30") or 30)
 SUPPORT_USERNAME = os.getenv("SUPPORT_USERNAME", "").strip().lstrip("@")
+VIDEO_FILE_ID = os.getenv("VIDEO_FILE_ID", "").strip()
 DB_PATH = os.getenv("DB_PATH", "/tmp/hot_bot.sqlite3")
 
 if not BOT_TOKEN:
@@ -56,42 +50,9 @@ def db():
     Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS users (
-            telegram_id INTEGER PRIMARY KEY,
-            username TEXT,
-            first_name TEXT,
-            age_confirmed INTEGER NOT NULL DEFAULT 0,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-        )
-        """
-    )
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS subscriptions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            telegram_id INTEGER NOT NULL,
-            expires_at TEXT NOT NULL,
-            charge_id TEXT UNIQUE,
-            payload TEXT UNIQUE,
-            created_at TEXT NOT NULL
-        )
-        """
-    )
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS invite_links (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            telegram_id INTEGER NOT NULL,
-            chat_id TEXT NOT NULL,
-            invite_link TEXT NOT NULL,
-            expires_at TEXT NOT NULL,
-            created_at TEXT NOT NULL
-        )
-        """
-    )
+    conn.execute("""CREATE TABLE IF NOT EXISTS users (telegram_id INTEGER PRIMARY KEY, username TEXT, first_name TEXT, age_confirmed INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS subscriptions (id INTEGER PRIMARY KEY AUTOINCREMENT, telegram_id INTEGER NOT NULL, expires_at TEXT NOT NULL, charge_id TEXT UNIQUE, payload TEXT UNIQUE, created_at TEXT NOT NULL)""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS invite_links (id INTEGER PRIMARY KEY AUTOINCREMENT, telegram_id INTEGER NOT NULL, chat_id TEXT NOT NULL, invite_link TEXT NOT NULL, expires_at TEXT NOT NULL, created_at TEXT NOT NULL)""")
     conn.commit()
     return conn
 
@@ -102,78 +63,75 @@ def upsert_user(message: Message):
     with closing(db()) as conn:
         existing = conn.execute("SELECT telegram_id FROM users WHERE telegram_id=?", (u.id,)).fetchone()
         if existing:
-            conn.execute(
-                "UPDATE users SET username=?, first_name=?, age_confirmed=1, updated_at=? WHERE telegram_id=?",
-                (u.username, u.first_name, ts, u.id),
-            )
+            conn.execute("UPDATE users SET username=?, first_name=?, age_confirmed=1, updated_at=? WHERE telegram_id=?", (u.username, u.first_name, ts, u.id))
         else:
-            conn.execute(
-                "INSERT INTO users(telegram_id, username, first_name, age_confirmed, created_at, updated_at) VALUES(?,?,?,?,?,?)",
-                (u.id, u.username, u.first_name, 1, ts, ts),
-            )
+            conn.execute("INSERT INTO users(telegram_id, username, first_name, age_confirmed, created_at, updated_at) VALUES(?,?,?,?,?,?)", (u.id, u.username, u.first_name, 1, ts, ts))
         conn.commit()
 
 
 def active_subscription(user_id: int) -> bool:
     with closing(db()) as conn:
-        row = conn.execute(
-            "SELECT expires_at FROM subscriptions WHERE telegram_id=? ORDER BY expires_at DESC LIMIT 1",
-            (user_id,),
-        ).fetchone()
+        row = conn.execute("SELECT expires_at FROM subscriptions WHERE telegram_id=? ORDER BY expires_at DESC LIMIT 1", (user_id,)).fetchone()
         return bool(row and datetime.fromisoformat(row["expires_at"]) > now())
 
 
 def add_subscription(user_id: int, charge_id: str, payload: str) -> datetime:
     with closing(db()) as conn:
-        row = conn.execute(
-            "SELECT expires_at FROM subscriptions WHERE telegram_id=? ORDER BY expires_at DESC LIMIT 1",
-            (user_id,),
-        ).fetchone()
+        row = conn.execute("SELECT expires_at FROM subscriptions WHERE telegram_id=? ORDER BY expires_at DESC LIMIT 1", (user_id,)).fetchone()
         base = now()
         if row:
             previous = datetime.fromisoformat(row["expires_at"])
             if previous > base:
                 base = previous
         expires = base + timedelta(days=SUBSCRIPTION_DAYS)
-        conn.execute(
-            "INSERT INTO subscriptions(telegram_id, expires_at, charge_id, payload, created_at) VALUES(?,?,?,?,?)",
-            (user_id, expires.isoformat(), charge_id, payload, now().isoformat()),
-        )
+        conn.execute("INSERT INTO subscriptions(telegram_id, expires_at, charge_id, payload, created_at) VALUES(?,?,?,?,?)", (user_id, expires.isoformat(), charge_id, payload, now().isoformat()))
         conn.commit()
     return expires
 
 
 def save_invite(user_id: int, chat_id: str, link: str, expires: datetime):
     with closing(db()) as conn:
-        conn.execute(
-            "INSERT INTO invite_links(telegram_id, chat_id, invite_link, expires_at, created_at) VALUES(?,?,?,?,?)",
-            (user_id, chat_id, link, expires.isoformat(), now().isoformat()),
-        )
+        conn.execute("INSERT INTO invite_links(telegram_id, chat_id, invite_link, expires_at, created_at) VALUES(?,?,?,?,?)", (user_id, chat_id, link, expires.isoformat(), now().isoformat()))
         conn.commit()
 
 
 def keyboard_menu() -> InlineKeyboardMarkup:
-    rows = [
+    return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="⭐ Assinar acesso VIP", callback_data="buy")],
         [InlineKeyboardButton(text="📅 Meu acesso", callback_data="status")],
         [InlineKeyboardButton(text="ℹ️ Regras e suporte", callback_data="support")],
-    ]
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+    ])
+
+
+def promo_text() -> str:
+    return ("<b>🔥 VOCÊ ESTÁ A UM CLIQUE DO CONTEÚDO EXCLUSIVO VIP</b>\n\n"
+            "🟢 <b>Condição especial de lançamento</b>\n\n"
+            "✨ Conteúdo exclusivo para adultos\n"
+            "🎬 Atualizações frequentes\n"
+            "🔒 Área privada para assinantes\n"
+            "⚡ Acesso liberado após a confirmação do pagamento\n\n"
+            "🎁 <b>Bônus e novidades para assinantes</b>\n\n"
+            "⚠️ Serviço destinado exclusivamente a maiores de 18 anos.")
 
 
 def support_text() -> str:
-    if SUPPORT_USERNAME:
-        return f"Suporte: @{SUPPORT_USERNAME}"
-    return "Suporte: configure SUPPORT_USERNAME no Render."
+    return f"Suporte: @{SUPPORT_USERNAME}" if SUPPORT_USERNAME else "Suporte: configure SUPPORT_USERNAME no Render."
 
 
 @router.message(CommandStart())
 async def start(message: Message):
     upsert_user(message)
-    await message.answer(
-        "<b>Bem-vindo à Área VIP.</b>\n\nServiço destinado exclusivamente a maiores de 18 anos.\n\nEscolha uma opção abaixo:",
-        reply_markup=keyboard_menu(),
-    )
+    if VIDEO_FILE_ID:
+        await message.answer_video(video=VIDEO_FILE_ID, caption=promo_text(), reply_markup=keyboard_menu())
+    else:
+        await message.answer(promo_text(), reply_markup=keyboard_menu())
+
+
+@router.message(F.video)
+async def receive_video(message: Message):
+    if message.video:
+        log.info("VIDEO_FILE_ID=%s", message.video.file_id)
+        await message.reply("Vídeo recebido. O identificador foi registrado nos logs do Render para configurar o vídeo automático do /start.")
 
 
 @router.callback_query(F.data == "buy")
@@ -183,15 +141,7 @@ async def buy(callback: CallbackQuery):
         await callback.message.answer("Você já possui uma assinatura ativa. Use 'Meu acesso' para consultar a validade.", reply_markup=keyboard_menu())
         return
     payload = f"vip:{callback.from_user.id}:{secrets.token_urlsafe(12)}"
-    await bot.send_invoice(
-        chat_id=callback.from_user.id,
-        title="Acesso VIP — 30 dias",
-        description="Assinatura de acesso digital à área VIP por 30 dias.",
-        payload=payload,
-        currency="XTR",
-        prices=[LabeledPrice(label="Acesso VIP — 30 dias", amount=PRICE_STARS)],
-        provider_token="",
-    )
+    await bot.send_invoice(chat_id=callback.from_user.id, title="Acesso VIP — 30 dias", description="Assinatura de acesso digital à área VIP por 30 dias.", payload=payload, currency="XTR", prices=[LabeledPrice(label="Acesso VIP — 30 dias", amount=PRICE_STARS)], provider_token="")
 
 
 @router.pre_checkout_query()
@@ -206,36 +156,24 @@ async def pre_checkout(query: PreCheckoutQuery):
 async def successful_payment(message: Message):
     payment = message.successful_payment
     try:
-        expires = add_subscription(
-            message.from_user.id,
-            payment.telegram_payment_charge_id,
-            payment.invoice_payload,
-        )
+        expires = add_subscription(message.from_user.id, payment.telegram_payment_charge_id, payment.invoice_payload)
     except sqlite3.IntegrityError:
         await message.answer("Este pagamento já foi processado. Use 'Meu acesso'.", reply_markup=keyboard_menu())
         return
-
-    links: list[str] = []
+    links = []
     invite_expiry = now() + timedelta(hours=48)
     for chat_id in (CHANNEL_ID, GROUP_ID):
         if not chat_id:
             continue
         try:
-            invite = await bot.create_chat_invite_link(
-                chat_id=chat_id,
-                name=f"VIP {message.from_user.id}",
-                expire_date=int(invite_expiry.timestamp()),
-                member_limit=1,
-            )
+            invite = await bot.create_chat_invite_link(chat_id=chat_id, name=f"VIP {message.from_user.id}", expire_date=int(invite_expiry.timestamp()), member_limit=1)
             save_invite(message.from_user.id, chat_id, invite.invite_link, invite_expiry)
             links.append(invite.invite_link)
         except Exception as exc:
             log.exception("Could not create invite for %s: %s", chat_id, exc)
-
     text = f"<b>Pagamento confirmado!</b> ⭐\n\nSeu acesso está válido até <b>{expires.strftime('%d/%m/%Y %H:%M UTC')}</b>.\n\n"
     if links:
-        text += "<b>Seus links de acesso:</b>\n" + "\n".join(f"• <a href=\"{link}\">Entrar na área VIP</a>" for link in links)
-        text += "\n\nNão compartilhe esses links."
+        text += "<b>Seus links de acesso:</b>\n" + "\n".join(f"• <a href=\"{link}\">Entrar na área VIP</a>" for link in links) + "\n\nNão compartilhe esses links."
     else:
         text += "O pagamento foi registrado, mas os links ainda não estão configurados. Configure CHANNEL_ID/GROUP_ID e fale com o suporte."
     await message.answer(text, reply_markup=keyboard_menu())
@@ -245,10 +183,7 @@ async def successful_payment(message: Message):
 async def status(callback: CallbackQuery):
     await callback.answer()
     with closing(db()) as conn:
-        row = conn.execute(
-            "SELECT expires_at FROM subscriptions WHERE telegram_id=? ORDER BY expires_at DESC LIMIT 1",
-            (callback.from_user.id,),
-        ).fetchone()
+        row = conn.execute("SELECT expires_at FROM subscriptions WHERE telegram_id=? ORDER BY expires_at DESC LIMIT 1", (callback.from_user.id,)).fetchone()
     if not row:
         await callback.message.answer("Você ainda não possui uma assinatura.", reply_markup=keyboard_menu())
         return
@@ -256,21 +191,13 @@ async def status(callback: CallbackQuery):
     if expires <= now():
         await callback.message.answer("Sua assinatura expirou. Você pode contratar um novo período.", reply_markup=keyboard_menu())
         return
-    remaining = expires - now()
-    days = remaining.days
-    await callback.message.answer(
-        f"<b>Seu acesso está ativo.</b>\n\nValidade: {expires.strftime('%d/%m/%Y %H:%M UTC')}\nTempo restante: aproximadamente {days} dia(s).",
-        reply_markup=keyboard_menu(),
-    )
+    await callback.message.answer(f"<b>Seu acesso está ativo.</b>\n\nValidade: {expires.strftime('%d/%m/%Y %H:%M UTC')}\nTempo restante: aproximadamente {(expires-now()).days} dia(s).", reply_markup=keyboard_menu())
 
 
 @router.callback_query(F.data == "support")
 async def support(callback: CallbackQuery):
     await callback.answer()
-    await callback.message.answer(
-        "<b>Regras e suporte</b>\n\n• Serviço exclusivo para maiores de 18 anos.\n• Não compartilhe links privados.\n• O acesso é pessoal e pode ser revogado em caso de abuso ou violação das regras.\n\n" + support_text(),
-        reply_markup=keyboard_menu(),
-    )
+    await callback.message.answer("<b>Regras e suporte</b>\n\n• Serviço exclusivo para maiores de 18 anos.\n• Não compartilhe links privados.\n• O acesso é pessoal e pode ser revogado em caso de abuso ou violação das regras.\n\n" + support_text(), reply_markup=keyboard_menu())
 
 
 @router.message(Command("stats"))
@@ -288,18 +215,14 @@ async def cleanup_expired_access():
     while True:
         try:
             with closing(db()) as conn:
-                rows = conn.execute(
-                    "SELECT DISTINCT telegram_id FROM subscriptions WHERE expires_at <= ?",
-                    (now().isoformat(),),
-                ).fetchall()
+                rows = conn.execute("SELECT DISTINCT telegram_id FROM subscriptions WHERE expires_at <= ?", (now().isoformat(),)).fetchall()
             for row in rows:
-                user_id = row["telegram_id"]
                 for chat_id in (CHANNEL_ID, GROUP_ID):
                     if not chat_id:
                         continue
                     try:
-                        await bot.ban_chat_member(chat_id=chat_id, user_id=user_id)
-                        await bot.unban_chat_member(chat_id=chat_id, user_id=user_id, only_if_banned=True)
+                        await bot.ban_chat_member(chat_id=chat_id, user_id=row["telegram_id"])
+                        await bot.unban_chat_member(chat_id=chat_id, user_id=row["telegram_id"], only_if_banned=True)
                     except Exception:
                         pass
         except Exception:
