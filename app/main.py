@@ -50,9 +50,10 @@ def db():
     Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
-    conn.execute("""CREATE TABLE IF NOT EXISTS users (telegram_id INTEGER PRIMARY KEY, username TEXT, first_name TEXT, age_confirmed INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)""")
-    conn.execute("""CREATE TABLE IF NOT EXISTS subscriptions (id INTEGER PRIMARY KEY AUTOINCREMENT, telegram_id INTEGER NOT NULL, expires_at TEXT NOT NULL, charge_id TEXT UNIQUE, payload TEXT UNIQUE, created_at TEXT NOT NULL)""")
-    conn.execute("""CREATE TABLE IF NOT EXISTS invite_links (id INTEGER PRIMARY KEY AUTOINCREMENT, telegram_id INTEGER NOT NULL, chat_id TEXT NOT NULL, invite_link TEXT NOT NULL, expires_at TEXT NOT NULL, created_at TEXT NOT NULL)""")
+    conn.execute("CREATE TABLE IF NOT EXISTS users (telegram_id INTEGER PRIMARY KEY, username TEXT, first_name TEXT, age_confirmed INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)")
+    conn.execute("CREATE TABLE IF NOT EXISTS subscriptions (id INTEGER PRIMARY KEY AUTOINCREMENT, telegram_id INTEGER NOT NULL, expires_at TEXT NOT NULL, charge_id TEXT UNIQUE, payload TEXT UNIQUE, created_at TEXT NOT NULL)")
+    conn.execute("CREATE TABLE IF NOT EXISTS invite_links (id INTEGER PRIMARY KEY AUTOINCREMENT, telegram_id INTEGER NOT NULL, chat_id TEXT NOT NULL, invite_link TEXT NOT NULL, expires_at TEXT NOT NULL, created_at TEXT NOT NULL)")
+    conn.execute("CREATE TABLE IF NOT EXISTS reminders (telegram_id INTEGER PRIMARY KEY, sent_at TEXT NOT NULL)")
     conn.commit()
     return conn
 
@@ -66,6 +67,7 @@ def upsert_user(message: Message):
             conn.execute("UPDATE users SET username=?, first_name=?, age_confirmed=1, updated_at=? WHERE telegram_id=?", (u.username, u.first_name, ts, u.id))
         else:
             conn.execute("INSERT INTO users(telegram_id, username, first_name, age_confirmed, created_at, updated_at) VALUES(?,?,?,?,?,?)", (u.id, u.username, u.first_name, 1, ts, ts))
+        conn.execute("DELETE FROM reminders WHERE telegram_id=?", (u.id,))
         conn.commit()
 
 
@@ -85,6 +87,7 @@ def add_subscription(user_id: int, charge_id: str, payload: str) -> datetime:
                 base = previous
         expires = base + timedelta(days=SUBSCRIPTION_DAYS)
         conn.execute("INSERT INTO subscriptions(telegram_id, expires_at, charge_id, payload, created_at) VALUES(?,?,?,?,?)", (user_id, expires.isoformat(), charge_id, payload, now().isoformat()))
+        conn.execute("DELETE FROM reminders WHERE telegram_id=?", (user_id,))
         conn.commit()
     return expires
 
@@ -126,6 +129,17 @@ def promo_text() -> str:
             "<i>Entre agora e aproveite o acesso VIP.</i>")
 
 
+def reminder_text() -> str:
+    return ("👋 <b>Oi! Sua oferta VIP ainda está disponível.</b>\n\n"
+            "Você iniciou o acesso, mas ainda não concluiu a assinatura.\n\n"
+            "🔥 Aproveite a oferta especial enquanto estiver disponível.\n"
+            "⭐ Conteúdo exclusivo para adultos\n"
+            "🔒 Área privada para assinantes\n"
+            "🎁 Bônus e novidades para assinantes\n\n"
+            "⚠️ Serviço exclusivo para maiores de 18 anos.\n\n"
+            "Se quiser continuar, é só tocar em <b>⭐ Assinar acesso VIP</b>.")
+
+
 def support_text() -> str:
     return f"Suporte: @{SUPPORT_USERNAME}" if SUPPORT_USERNAME else "Suporte: configure SUPPORT_USERNAME no Render."
 
@@ -149,6 +163,7 @@ async def receive_video(message: Message):
 @router.callback_query(F.data == "buy")
 async def buy(callback: CallbackQuery):
     await callback.answer()
+    upsert_user(callback.message)
     if active_subscription(callback.from_user.id):
         await callback.message.answer("Você já possui uma assinatura ativa. Use 'Meu acesso' para consultar a validade.", reply_markup=keyboard_menu())
         return
@@ -194,6 +209,7 @@ async def successful_payment(message: Message):
 @router.callback_query(F.data == "status")
 async def status(callback: CallbackQuery):
     await callback.answer()
+    upsert_user(callback.message)
     with closing(db()) as conn:
         row = conn.execute("SELECT expires_at FROM subscriptions WHERE telegram_id=? ORDER BY expires_at DESC LIMIT 1", (callback.from_user.id,)).fetchone()
     if not row:
@@ -209,6 +225,7 @@ async def status(callback: CallbackQuery):
 @router.callback_query(F.data == "support")
 async def support(callback: CallbackQuery):
     await callback.answer()
+    upsert_user(callback.message)
     await callback.message.answer("<b>Regras e suporte</b>\n\n• Serviço exclusivo para maiores de 18 anos.\n• Não compartilhe links privados.\n• O acesso é pessoal e pode ser revogado em caso de abuso ou violação das regras.\n\n" + support_text(), reply_markup=keyboard_menu())
 
 
@@ -242,6 +259,28 @@ async def cleanup_expired_access():
         await asyncio.sleep(3600)
 
 
+async def send_subscription_reminders():
+    while True:
+        try:
+            cutoff = now() - timedelta(days=1)
+            with closing(db()) as conn:
+                rows = conn.execute("SELECT u.telegram_id FROM users u LEFT JOIN reminders r ON r.telegram_id=u.telegram_id WHERE u.updated_at <= ? AND r.telegram_id IS NULL", (cutoff.isoformat(),)).fetchall()
+            for row in rows:
+                user_id = row["telegram_id"]
+                if active_subscription(user_id):
+                    continue
+                try:
+                    await bot.send_message(user_id, reminder_text(), reply_markup=keyboard_menu())
+                    with closing(db()) as conn:
+                        conn.execute("INSERT OR IGNORE INTO reminders(telegram_id, sent_at) VALUES(?,?)", (user_id, now().isoformat()))
+                        conn.commit()
+                except Exception as exc:
+                    log.warning("Could not send reminder to %s: %s", user_id, exc)
+        except Exception:
+            log.exception("Reminder task failed")
+        await asyncio.sleep(3600)
+
+
 @app.get("/")
 async def root():
     return {"service": "vip-telegram-bot", "status": "ok"}
@@ -255,6 +294,7 @@ async def health():
 async def bot_runner():
     await bot.delete_webhook(drop_pending_updates=False)
     asyncio.create_task(cleanup_expired_access())
+    asyncio.create_task(send_subscription_reminders())
     log.info("Bot started as @%s", BOT_USERNAME)
     await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
 
