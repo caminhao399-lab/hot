@@ -31,12 +31,10 @@ SUPPORT_USERNAME = os.getenv("SUPPORT_USERNAME", "").strip().lstrip("@")
 VIDEO_FILE_ID = os.getenv("VIDEO_FILE_ID", "").strip()
 DB_PATH = os.getenv("DB_PATH", "/tmp/hot_bot.sqlite3")
 
-# BravoPay PIX configuration. Keep the API key only in Render environment variables.
 BRAVOPAY_API_KEY = os.getenv("BRAVOPAY_API_KEY", "").strip()
 BRAVOPAY_BASE_URL = os.getenv("BRAVOPAY_BASE_URL", "https://bravopay.club/api/v1").strip().rstrip("/")
 BRAVOPAY_WEBHOOK_SECRET = os.getenv("BRAVOPAY_WEBHOOK_SECRET", "").strip()
 
-# Optional real BravoPay product IDs. Set these only if UTMify/product attribution is used.
 BRAVOPAY_PRODUCT_IDS = {
     "essential": os.getenv("BRAVOPAY_PRODUCT_ID_ESSENTIAL", "").strip(),
     "premium": os.getenv("BRAVOPAY_PRODUCT_ID_PREMIUM", "").strip(),
@@ -44,7 +42,6 @@ BRAVOPAY_PRODUCT_IDS = {
     "full": os.getenv("BRAVOPAY_PRODUCT_ID_FULL", "").strip(),
 }
 
-# Optional UTM defaults for traffic that reaches the Telegram bot without browser URL parameters.
 DEFAULT_UTM = {
     "source": os.getenv("UTM_SOURCE", "").strip(),
     "medium": os.getenv("UTM_MEDIUM", "").strip(),
@@ -73,9 +70,6 @@ dp = Dispatcher()
 dp.include_router(router)
 bot = Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 app = FastAPI(title="VIP Telegram Bot")
-
-# Temporary checkout data only. Name/document are not written to the database or logs.
-pending_payer = {}
 
 
 def now() -> datetime:
@@ -217,49 +211,6 @@ def order_payload(order_id: str) -> str:
     return f"vip:{order_id}"
 
 
-def normalize_document(value: str) -> str:
-    return "".join(ch for ch in value if ch.isdigit())
-
-
-def valid_cpf(value: str) -> bool:
-    cpf = normalize_document(value)
-    if len(cpf) != 11 or cpf == cpf[0] * 11:
-        return False
-    total = sum(int(cpf[i]) * (10 - i) for i in range(9))
-    d1 = (total * 10) % 11
-    if d1 == 10:
-        d1 = 0
-    if d1 != int(cpf[9]):
-        return False
-    total = sum(int(cpf[i]) * (11 - i) for i in range(10))
-    d2 = (total * 10) % 11
-    if d2 == 10:
-        d2 = 0
-    return d2 == int(cpf[10])
-
-
-def valid_cnpj(value: str) -> bool:
-    cnpj = normalize_document(value)
-    if len(cnpj) != 14 or cnpj == cnpj[0] * 14:
-        return False
-    weights1 = [5,4,3,2,9,8,7,6,5,4,3,2]
-    total = sum(int(cnpj[i]) * weights1[i] for i in range(12))
-    d1 = 11 - (total % 11)
-    if d1 >= 10:
-        d1 = 0
-    weights2 = [6,5,4,3,2,9,8,7,6,5,4,3,2]
-    total = sum(int(cnpj[i]) * weights2[i] for i in range(13))
-    d2 = 11 - (total % 11)
-    if d2 >= 10:
-        d2 = 0
-    return d1 == int(cnpj[12]) and d2 == int(cnpj[13])
-
-
-def valid_document(value: str) -> bool:
-    document = normalize_document(value)
-    return valid_cpf(document) or valid_cnpj(document)
-
-
 async def bravopay_request(method: str, path: str, payload=None):
     headers = {
         "Authorization": f"Bearer {BRAVOPAY_API_KEY}",
@@ -284,12 +235,10 @@ async def bravopay_request(method: str, path: str, payload=None):
 
 
 def build_utm():
-    # The Telegram bot has no browser URL query string. If campaign values are supplied
-    # in Render, they are forwarded to BravoPay exactly as documented by the provider.
     return {key: value for key, value in DEFAULT_UTM.items() if value}
 
 
-async def create_pix_order(user_id: int, plan_key: str, payer_name: str, payer_document: str):
+async def create_pix_order(user_id: int, plan_key: str):
     if not configured_pix():
         raise RuntimeError("PIX_NOT_CONFIGURED")
     plan = PLANS[plan_key]
@@ -297,10 +246,6 @@ async def create_pix_order(user_id: int, plan_key: str, payer_name: str, payer_d
     payload = {
         "amount_cents": int(plan["amount_cents"]),
         "method": "pix",
-        "customer": {
-            "name": payer_name,
-            "cpf": normalize_document(payer_document),
-        },
         "description": f"Acesso VIP - {plan['label']}",
         "external_reference": order_id,
         "metadata": {
@@ -428,12 +373,8 @@ def webhook_signature_valid(raw_body: bytes, signature: str) -> bool:
 
 @router.message(CommandStart())
 async def start(message: Message):
-    pending_payer.pop(message.from_user.id, None)
     upsert_user(message)
-    if VIDEO_FILE_ID:
-        await message.answer_video(video=VIDEO_FILE_ID, caption=promo_text(), reply_markup=keyboard_menu())
-    else:
-        await message.answer(promo_text(), reply_markup=keyboard_menu())
+    await message.answer(promo_text(), reply_markup=keyboard_menu()) if not VIDEO_FILE_ID else await message.answer_video(video=VIDEO_FILE_ID, caption=promo_text(), reply_markup=keyboard_menu())
 
 
 @router.message(F.video)
@@ -446,7 +387,6 @@ async def receive_video(message: Message):
 @router.callback_query(F.data == "buy")
 async def buy(callback: CallbackQuery):
     await callback.answer()
-    pending_payer.pop(callback.from_user.id, None)
     upsert_user(callback.message)
     if active_subscription(callback.from_user.id):
         await callback.message.answer("Você já possui uma assinatura ativa. Use 'Meu acesso' para consultar a validade.", reply_markup=keyboard_menu())
@@ -469,8 +409,17 @@ async def choose_plan(callback: CallbackQuery):
         log.error("BravoPay is not configured on the server")
         await callback.message.answer("O pagamento por PIX está temporariamente indisponível. Tente novamente mais tarde.", reply_markup=keyboard_menu())
         return
-    pending_payer[callback.from_user.id] = {"plan_key": plan_key, "step": "name"}
-    await callback.message.answer("Para gerar seu PIX, informe seu <b>nome completo</b>.")
+
+    plan = PLANS[plan_key]
+    await callback.message.answer("⏳ Gerando seu PIX...")
+    try:
+        order_id, pix_code = await create_pix_order(callback.from_user.id, plan_key)
+    except Exception as exc:
+        log.exception("Could not create BravoPay PIX order: %s", exc)
+        await callback.message.answer("Não foi possível gerar o PIX agora. Tente novamente em alguns instantes.", reply_markup=plans_keyboard())
+        return
+    text_out = (f"<b>PIX gerado com sucesso</b> ✅\n\n<b>Plano:</b> {plan['label']}\n<b>Valor:</b> R$ {plan['amount_cents']/100:.2f}\n\n<b>Código PIX copia e cola:</b>\n<code>{pix_code}</code>\n\nCopie o código, faça o pagamento no seu banco e depois toque em <b>🔄 Verificar pagamento</b>.")
+    await callback.message.answer(text_out, reply_markup=pix_keyboard(order_id))
 
 
 @router.message(Command("stats"))
@@ -483,41 +432,6 @@ async def stats(message: Message):
         payments = conn.execute("SELECT COUNT(*) c FROM subscriptions").fetchone()["c"]
         pending = conn.execute("SELECT COUNT(*) c FROM pix_orders WHERE status NOT IN ('PAID','FAILED','EXPIRED','REFUNDED','CANCELED','CHARGEBACK')").fetchone()["c"]
     await message.answer(f"<b>Dashboard</b>\nUsuários: {users}\nAssinaturas ativas: {active}\nPagamentos processados: {payments}\nPIX pendentes: {pending}")
-
-
-@router.message(F.text)
-async def collect_payer_details(message: Message):
-    user_id = message.from_user.id
-    data = pending_payer.get(user_id)
-    if not data:
-        return
-    text = (message.text or "").strip()
-    if data["step"] == "name":
-        if len(text) < 3 or len(text.split()) < 2 or len(text) > 120:
-            await message.answer("Informe seu <b>nome completo</b> para continuar.")
-            return
-        data["payer_name"] = text
-        data["step"] = "document"
-        await message.answer("Agora informe seu <b>CPF ou CNPJ</b> (pode enviar com ou sem pontuação).")
-        return
-    if data["step"] == "document":
-        document = normalize_document(text)
-        if not valid_document(document):
-            await message.answer("CPF/CNPJ inválido. Confira os números e envie novamente.")
-            return
-        plan_key = data["plan_key"]
-        payer_name = data["payer_name"]
-        pending_payer.pop(user_id, None)
-        plan = PLANS[plan_key]
-        await message.answer("⏳ Gerando seu PIX...")
-        try:
-            order_id, pix_code = await create_pix_order(user_id, plan_key, payer_name, document)
-        except Exception as exc:
-            log.exception("Could not create BravoPay PIX order: %s", exc)
-            await message.answer("Não foi possível gerar o PIX agora. Tente novamente em alguns instantes.", reply_markup=plans_keyboard())
-            return
-        text_out = (f"<b>PIX gerado com sucesso</b> ✅\n\n<b>Plano:</b> {plan['label']}\n<b>Valor:</b> R$ {plan['amount_cents']/100:.2f}\n\n<b>Código PIX copia e cola:</b>\n<code>{pix_code}</code>\n\nCopie o código, faça o pagamento no seu banco e depois toque em <b>🔄 Verificar pagamento</b>.")
-        await message.answer(text_out, reply_markup=pix_keyboard(order_id))
 
 
 @router.callback_query(F.data.startswith("pixcheck:"))
@@ -545,7 +459,6 @@ async def pix_check(callback: CallbackQuery):
 @router.callback_query(F.data == "back")
 async def back(callback: CallbackQuery):
     await callback.answer()
-    pending_payer.pop(callback.from_user.id, None)
     await callback.message.answer(promo_text(), reply_markup=keyboard_menu())
 
 
