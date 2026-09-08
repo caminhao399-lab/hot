@@ -2,8 +2,6 @@ name: Fix start menu button
 on:
   workflow_dispatch:
   push:
-    paths:
-      - 'app/main.py'
 permissions:
   contents: write
 jobs:
