@@ -2,9 +2,11 @@
 
 import hashlib
 import os
+import re
 from pathlib import Path
 
 from aiogram import Dispatcher
+from aiogram.types import Message as AiogramMessage
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from app.checkout import router as _checkout_router
@@ -38,6 +40,34 @@ async def _start_webhook_instead_of_polling(self, *bots, **kwargs):
 Dispatcher.start_polling = _start_webhook_instead_of_polling
 
 
+_original_message_answer = AiogramMessage.answer
+
+
+async def _message_answer_with_split_pix_flow(self, text=None, *args, **kwargs):
+    """Render the existing PIX response as the requested separate messages."""
+    if isinstance(text, str) and "PIX gerado com sucesso" in text and "Código PIX copia e cola:" in text:
+        code_match = re.search(r"<code>(.*?)</code>", text, re.S)
+        plan_match = re.search(r"<b>Plano:</b>\s*(.*?)\s*<b>Valor:</b>\s*R\$\s*([0-9.,]+)", text, re.S)
+        if code_match and plan_match:
+            pix_code = code_match.group(1).strip()
+            plan_label = re.sub(r"\s+", " ", plan_match.group(1).strip())
+            value = plan_match.group(2).strip()
+            final_kwargs = dict(kwargs)
+            reply_markup = final_kwargs.pop("reply_markup", None)
+            await _original_message_answer(self, f"<b>PIX gerado com sucesso</b> ✅\n\n<b>Plano:</b> {plan_label}\n\n<b>Valor:</b> R$ {value}", *args, **final_kwargs)
+            await _original_message_answer(self, "✅ <b>Como realizar o pagamento:</b>\n\n1. Abra o aplicativo do seu banco.\n2. Selecione a opção \"Pagar\" ou \"PIX\".\n3. Escolha \"PIX Copia e Cola\".\n4. Cole a chave da mensagem abaixo...", *args, **final_kwargs)
+            await _original_message_answer(self, "Copie o código abaixo:", *args, **final_kwargs)
+            await _original_message_answer(self, f"<code>{pix_code}</code>", *args, **final_kwargs)
+            final_kwargs["reply_markup"] = reply_markup
+            return await _original_message_answer(self, "Após efetuar o pagamento, clique no botão abaixo 👇", *args, **final_kwargs)
+    return await _original_message_answer(self, text, *args, **kwargs)
+
+
+if not getattr(AiogramMessage.answer, "_hot_pix_split_patch", False):
+    _message_answer_with_split_pix_flow._hot_pix_split_patch = True
+    AiogramMessage.answer = _message_answer_with_split_pix_flow
+
+
 _original_fastapi_init = FastAPI.__init__
 
 
@@ -65,6 +95,26 @@ def _fastapi_init_with_checkout(self, *args, **kwargs):
         import app.main as main
         await main.dp.feed_raw_update(main.bot, payload)
         return JSONResponse({"ok": True})
+
+    @self.on_event("startup")
+    async def _patch_pix_button_labels():
+        import app.main as main
+        original_pix_keyboard = main.pix_keyboard
+        if getattr(original_pix_keyboard, "_hot_button_label_patch", False):
+            return
+
+        def _pix_keyboard_with_requested_labels(order_id: str, pix_code: str = ""):
+            markup = original_pix_keyboard(order_id, pix_code)
+            for row in markup.inline_keyboard:
+                for button in row:
+                    if button.text == "📋 Copiar chave PIX":
+                        button.text = "📋 Copiar Código"
+                    elif button.text == "🔄 Verificar pagamento":
+                        button.text = "✅ Verificar Status"
+            return markup
+
+        _pix_keyboard_with_requested_labels._hot_button_label_patch = True
+        main.pix_keyboard = _pix_keyboard_with_requested_labels
 
     self._hot_integrations_registered = True
 
