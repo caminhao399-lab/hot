@@ -1,0 +1,30 @@
+services:
+  - type: web
+    name: hot-telegram-bot
+    runtime: python
+    plan: free
+    branch: main
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.13.10
+      - key: BOT_TOKEN
+        sync: false
+      - key: BOT_USERNAME
+        value: porno_sexy_bot
+      - key: CHANNEL_ID
+        sync: false
+      - key: GROUP_ID
+        sync: false
+      - key: ADMIN_ID
+        sync: false
+      - key: PRICE_STARS
+        value: "100"
+      - key: SUBSCRIPTION_DAYS
+        value: "30"
+      - key: SUPPORT_USERNAME
+        sync: false
+      - key: DB_PATH
+        value: /tmp/hot_bot.sqlite3
