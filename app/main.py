@@ -16,7 +16,7 @@ from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.filters import Command, CommandStart
-from aiogram.types import BotCommand, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import BotCommand, CallbackQuery, CopyTextButton, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
@@ -158,11 +158,13 @@ def plans_keyboard() -> InlineKeyboardMarkup:
     ])
 
 
-def pix_keyboard(order_id: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔄 Verificar pagamento", callback_data=f"pixcheck:{order_id}")],
-        [InlineKeyboardButton(text="❌ Cancelar", callback_data="back")],
-    ])
+def pix_keyboard(order_id: str, pix_code: str = "") -> InlineKeyboardMarkup:
+    buttons = []
+    if pix_code:
+        buttons.append([InlineKeyboardButton(text="📋 Copiar chave PIX", copy_text=CopyTextButton(text=pix_code))])
+    buttons.append([InlineKeyboardButton(text="🔄 Verificar pagamento", callback_data=f"pixcheck:{order_id}")])
+    buttons.append([InlineKeyboardButton(text="❌ Cancelar", callback_data="back")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 def promo_text() -> str:
@@ -466,7 +468,7 @@ async def choose_plan(callback: CallbackQuery):
         await callback.message.answer("Não foi possível gerar o PIX agora. Tente novamente em alguns instantes.", reply_markup=plans_keyboard())
         return
     text_out = (f"<b>PIX gerado com sucesso</b> ✅\n\n<b>Plano:</b> {plan['label']}\n<b>Valor:</b> R$ {plan['amount_cents']/100:.2f}\n\n<b>Código PIX copia e cola:</b>\n<code>{pix_code}</code>\n\nCopie o código, faça o pagamento no seu banco e depois toque em <b>🔄 Verificar pagamento</b>.")
-    await callback.message.answer(text_out, reply_markup=pix_keyboard(order_id))
+    await callback.message.answer(text_out, reply_markup=pix_keyboard(order_id, pix_code))
 
 
 @router.message(Command("stats"))
