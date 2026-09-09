@@ -1,12 +1,13 @@
 """Application package hooks for checkout and Telegram webhook mode."""
 
+import asyncio
 import hashlib
 import os
 import re
 from pathlib import Path
 
 from aiogram import Dispatcher
-from aiogram.types import Message as AiogramMessage
+from aiogram.types import CallbackQuery, Message as AiogramMessage
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from app.checkout import router as _checkout_router
@@ -36,8 +37,25 @@ async def _start_webhook_instead_of_polling(self, *bots, **kwargs):
     print(f"Telegram webhook active: {PUBLIC_URL}{WEBHOOK_PATH}")
 
 
-# app.main calls dp.start_polling(). Patch it before app.main is imported.
 Dispatcher.start_polling = _start_webhook_instead_of_polling
+
+
+# Callback queries can expire while a Render instance is waking up or while
+# another Telegram/BravoPay request is being processed. Never let an expired
+# callback answer abort the actual button handler.
+_original_callback_answer = CallbackQuery.answer
+
+
+async def _safe_callback_answer(self, *args, **kwargs):
+    try:
+        return await asyncio.wait_for(_original_callback_answer(self, *args, **kwargs), timeout=2.5)
+    except Exception:
+        return None
+
+
+if not getattr(CallbackQuery.answer, "_hot_safe_callback_patch", False):
+    _safe_callback_answer._hot_safe_callback_patch = True
+    CallbackQuery.answer = _safe_callback_answer
 
 
 _original_message_answer = AiogramMessage.answer
@@ -91,9 +109,12 @@ def _fastapi_init_with_checkout(self, *args, **kwargs):
         if WEBHOOK_SECRET and request.headers.get("X-Telegram-Bot-Api-Secret-Token") != WEBHOOK_SECRET:
             return JSONResponse({"ok": False}, status_code=401)
         payload = await request.json()
-        # Import lazily so app.main has finished initializing its bot/dispatcher.
         import app.main as main
-        await main.dp.feed_raw_update(main.bot, payload)
+        # Acknowledge Telegram immediately. Processing the update in the
+        # background prevents slow BravoPay/API calls from making Telegram
+        # retry the same webhook update or making button callbacks expire.
+        task = asyncio.create_task(main.dp.feed_raw_update(main.bot, payload))
+        task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
         return JSONResponse({"ok": True})
 
     @self.on_event("startup")
