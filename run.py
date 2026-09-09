@@ -38,13 +38,14 @@ import app.main as main  # noqa: E402
 
 
 # The reminder text already configured in app.main is kept unchanged.
-# Keep its existing first-reminder delay (1 day), then resend it every 30 minutes
-# until the user subscribes. This task is independent of PIX generation/status.
+# First reminder: 30 minutes after the user's last activity. After that,
+# resend every 30 minutes until the user subscribes. This task is independent
+# of PIX generation/status.
 async def repeating_subscription_reminders():
     while True:
         try:
             current = main.now()
-            first_reminder_cutoff = current - main.timedelta(days=1)
+            first_reminder_cutoff = current - main.timedelta(minutes=30)
             repeat_cutoff = current - main.timedelta(minutes=30)
             with main.closing(main.db()) as conn:
                 rows = conn.execute(
