@@ -55,10 +55,10 @@ DEFAULT_UTM = {
 }
 
 PLANS = {
-    "essential": {"label": "VIP Essencial", "amount_cents": 800, "days": 30},
-    "premium": {"label": "VIP Premium", "amount_cents": 1490, "days": 30},
-    "acervo": {"label": "VIP Premium + Acervo", "amount_cents": 1690, "days": 30},
-    "full": {"label": "Acesso Full + Bônus", "amount_cents": 2390, "days": 30},
+    "essential": {"label": "VIP Essencial", "amount_cents": 1290, "days": 30},
+    "premium": {"label": "VIP Premium", "amount_cents": 1890, "days": 30},
+    "acervo": {"label": "VIP Premium + Acervo", "amount_cents": 2090, "days": 30},
+    "full": {"label": "Acesso Full + Bônus", "amount_cents": 2990, "days": 30},
 }
 
 if not BOT_TOKEN:
@@ -150,10 +150,10 @@ def keyboard_menu() -> InlineKeyboardMarkup:
 
 def plans_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🟢 VIP Essencial — R$ 8,00", callback_data="plan:essential")],
-        [InlineKeyboardButton(text="🔴 VIP Premium — R$ 14,90", callback_data="plan:premium")],
-        [InlineKeyboardButton(text="🔒 VIP Premium + Acervo — R$ 16,90", callback_data="plan:acervo")],
-        [InlineKeyboardButton(text="🎁 Acesso Full + Bônus — R$ 23,90", callback_data="plan:full")],
+        [InlineKeyboardButton(text="🟢 VIP Essencial — R$ 12,90", callback_data="plan:essential")],
+        [InlineKeyboardButton(text="🔴 VIP Premium — R$ 18,90", callback_data="plan:premium")],
+        [InlineKeyboardButton(text="⭐ VIP Premium + Acervo — R$ 20,90", callback_data="plan:acervo")],
+        [InlineKeyboardButton(text="👑 Acesso Full + Bônus — R$ 29,90", callback_data="plan:full")],
         [InlineKeyboardButton(text="⬅️ Voltar", callback_data="back")],
     ])
 
@@ -298,11 +298,6 @@ def get_order(order_id: str):
 
 
 async def recover_order_from_bravopay(order_id: str, telegram_id: int):
-    """Recover a local PIX order after a Render restart/redeploy.
-
-    The PIX transaction is not recreated. BravoPay is queried using the same
-    external_reference that was assigned when the original PIX was created.
-    """
     data = await bravopay_request(
         "GET",
         f"/transactions?external_reference={quote(order_id, safe='')}&limit=1",
@@ -562,7 +557,7 @@ async def cleanup_expired_access():
 async def send_subscription_reminders():
     while True:
         try:
-            cutoff = now() - timedelta(days=1)
+            cutoff = now() - timedelta(minutes=30)
             with closing(db()) as conn:
                 rows = conn.execute("SELECT u.telegram_id FROM users u LEFT JOIN reminders r ON r.telegram_id=u.telegram_id WHERE u.updated_at <= ? AND r.telegram_id IS NULL", (cutoff.isoformat(),)).fetchall()
             for row in rows:
@@ -578,7 +573,7 @@ async def send_subscription_reminders():
                     log.warning("Could not send reminder to %s: %s", user_id, exc)
         except Exception:
             log.exception("Reminder task failed")
-        await asyncio.sleep(3600)
+        await asyncio.sleep(1800)
 
 
 async def poll_pending_pix():
