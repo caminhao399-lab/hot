@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#09070c">
+<meta name="description" content="Área VIP exclusiva para maiores de 18 anos. Escolha seu acesso e continue para o checkout.">
+<title>VIP HOT — Acesso Privado 18+</title>
+<style>
+:root{--bg:#08060a;--card:rgba(20,15,24,.82);--line:rgba(255,255,255,.11);--text:#fff;--muted:#bdb5c3;--pink:#ff3d8d;--pink2:#ff7ab4;--gold:#ffd36b}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;min-height:100vh;color:var(--text);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:
+radial-gradient(circle at 15% 15%,rgba(255,61,141,.20),transparent 32%),
+radial-gradient(circle at 85% 20%,rgba(255,211,107,.10),transparent 28%),
+radial-gradient(circle at 50% 100%,rgba(125,52,255,.15),transparent 38%),var(--bg);overflow-x:hidden}
+body:before{content:"";position:fixed;inset:0;pointer-events:none;background:linear-gradient(115deg,transparent 0 47%,rgba(255,255,255,.018) 50%,transparent 53%);opacity:.6}
+.wrap{width:min(1120px,92%);margin:auto}
+nav{display:flex;align-items:center;justify-content:space-between;padding:22px 0}
+.logo{font-weight:950;letter-spacing:.12em;font-size:20px}.logo span{color:var(--pink)}
+.navbadge{border:1px solid var(--line);background:rgba(255,255,255,.045);padding:9px 13px;border-radius:999px;font-size:12px;color:#ddd}
+.hero{display:grid;grid-template-columns:1.08fr .92fr;gap:34px;align-items:center;padding:48px 0 34px}
+.eyebrow{display:inline-flex;gap:8px;align-items:center;padding:8px 12px;border:1px solid rgba(255,61,141,.35);background:rgba(255,61,141,.08);border-radius:999px;color:#ffd0e5;font-size:12px;font-weight:800;letter-spacing:.06em}
+h1{font-size:clamp(42px,6vw,78px);line-height:.94;letter-spacing:-.055em;margin:20px 0 18px}
+h1 em{font-style:normal;background:linear-gradient(90deg,#fff,var(--pink2));-webkit-background-clip:text;background-clip:text;color:transparent}
+.lead{font-size:18px;line-height:1.65;color:var(--muted);max-width:650px}
+.actions{display:flex;gap:12px;flex-wrap:wrap;margin:28px 0}
+.btn{display:inline-flex;align-items:center;justify-content:center;text-decoration:none;border-radius:15px;padding:15px 20px;font-weight:900;transition:.2s transform,.2s box-shadow}
+.btn:hover{transform:translateY(-2px)}
+.primary{color:#160812;background:linear-gradient(135deg,#fff,var(--pink2));box-shadow:0 12px 35px rgba(255,61,141,.22)}
+.secondary{color:#fff;border:1px solid var(--line);background:rgba(255,255,255,.05)}
+.trust{display:flex;gap:18px;flex-wrap:wrap;color:#aaa1ad;font-size:12px}.trust b{color:#eee}
+.visa{position:relative;min-height:360px;border:1px solid rgba(255,255,255,.14);border-radius:30px;background:linear-gradient(145deg,rgba(255,255,255,.12),rgba(255,255,255,.035));box-shadow:0 30px 90px rgba(0,0,0,.48),inset 0 1px rgba(255,255,255,.12);padding:26px;overflow:hidden;backdrop-filter:blur(18px);transform:rotate(1deg)}
+.visa:before,.visa:after{content:"";position:absolute;border-radius:50%;filter:blur(2px)}
+.visa:before{width:220px;height:220px;right:-80px;top:-70px;background:radial-gradient(circle,rgba(255,61,141,.55),transparent 68%)}
+.visa:after{width:180px;height:180px;left:-90px;bottom:-90px;background:radial-gradient(circle,rgba(255,211,107,.24),transparent 68%)}
+.chip{width:48px;height:36px;border-radius:9px;background:linear-gradient(135deg,#d9c6a0,#fff0bd,#9d845c);box-shadow:inset 0 0 0 1px rgba(0,0,0,.18)}
+.cardtop{display:flex;justify-content:space-between;align-items:flex-start;position:relative;z-index:1}.mark{font-weight:950;font-size:18px;letter-spacing:.18em}.mark span{color:var(--pink)}
+.cardcopy{position:relative;z-index:1;margin-top:75px}.cardcopy small{color:#aaa;font-size:11px;letter-spacing:.15em}.cardcopy strong{display:block;font-size:34px;margin-top:8px}.cardcopy p{color:#d2cbd5;margin:8px 0 0}
+.cardbottom{position:absolute;z-index:1;bottom:24px;left:26px;right:26px;display:flex;justify-content:space-between;color:#d7d0da;font-size:11px;letter-spacing:.1em}
+section{padding:70px 0}.section-title{text-align:center;max-width:680px;margin:0 auto 30px}.section-title h2{font-size:36px;margin:0 0 10px;letter-spacing:-.04em}.section-title p{color:var(--muted);line-height:1.6}
+.plans{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}.plan{position:relative;display:flex;flex-direction:column;border:1px solid var(--line);background:var(--card);border-radius:22px;padding:22px;min-height:245px;box-shadow:0 15px 45px rgba(0,0,0,.22)}.plan.featured{border-color:rgba(255,61,141,.48);box-shadow:0 20px 55px rgba(255,61,141,.10)}.ribbon{position:absolute;top:14px;right:14px;font-size:10px;font-weight:900;color:#1b0b12;background:var(--gold);padding:6px 8px;border-radius:999px}.plan h3{margin:0 0 9px;font-size:18px}.price{font-size:30px;font-weight:950;margin:5px 0}.price small{font-size:12px;color:#aaa;font-weight:600}.plan ul{list-style:none;padding:0;margin:12px 0 20px;color:#bdb5c3;font-size:13px;line-height:1.8}.plan li:before{content:"✓";color:var(--pink2);font-weight:900;margin-right:8px}.plan .btn{margin-top:auto;width:100%;padding:12px}
+.benefits{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}.benefit{padding:24px;border:1px solid var(--line);border-radius:20px;background:rgba(255,255,255,.035)}.benefit .icon{font-size:25px}.benefit h3{margin:12px 0 7px}.benefit p{margin:0;color:var(--muted);line-height:1.55;font-size:14px}
+.cta{border:1px solid rgba(255,61,141,.25);background:linear-gradient(135deg,rgba(255,61,141,.12),rgba(255,255,255,.035));border-radius:28px;padding:38px;text-align:center}.cta h2{font-size:38px;margin:0 0 10px}.cta p{color:var(--muted);margin:0 auto 22px;max-width:600px;line-height:1.6}
+footer{padding:30px 0 45px;color:#77717d;font-size:11px;text-align:center}.age{color:#c6bec9}
+@media(max-width:900px){.hero{grid-template-columns:1fr}.visa{max-width:600px;margin:0 auto;width:100%}.plans{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:560px){nav{padding-top:16px}.hero{padding-top:25px}.plans,.benefits{grid-template-columns:1fr}h1{font-size:47px}.visa{min-height:320px}.cardcopy{margin-top:58px}.cta{padding:28px 20px}.cta h2{font-size:30px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<nav><div class="logo">VIP<span>HOT</span></div><div class="navbadge">🔞 18+ • ÁREA PRIVADA</div></nav>
+<main>
+<section class="hero">
+<div>
+<div class="eyebrow">✦ EXPERIÊNCIA VIP • ACESSO PRIVADO</div>
+<h1>Seu lado mais <em>exclusivo</em> começa aqui.</h1>
+<p class="lead">Uma área reservada para maiores de 18 anos, com conteúdo premium, novidades e benefícios para assinantes. Escolha seu acesso e continue para o pagamento seguro via PIX.</p>
+<div class="actions"><a class="btn primary" href="/checkout">QUERO MEU ACESSO VIP →</a><a class="btn secondary" href="#planos">VER PLANOS</a></div>
+<div class="trust"><span>🔒 <b>Área privada</b></span><span>⚡ <b>PIX</b></span><span>💎 <b>Planos VIP</b></span><span>🔞 <b>18+</b></span></div>
+</div>
+<div class="visa" aria-label="Cartão VIP">
+<div class="cardtop"><div class="chip"></div><div class="mark">VIP<span>HOT</span></div></div>
+<div class="cardcopy"><small>MEMBERSHIP CARD</small><strong>ACCESS • PRIVATE</strong><p>Conteúdo premium para assinantes.</p></div>
+<div class="cardbottom"><span>18+ ONLY</span><span>VIP MEMBER</span></div>
+</div>
+</section>
+
+<section id="planos">
+<div class="section-title"><h2>Escolha seu acesso</h2><p>Quatro opções para você entrar na área VIP. O pagamento é feito no checkout por PIX.</p></div>
+<div class="plans">
+<article class="plan"><h3>🟢 VIP Essencial</h3><div class="price">R$ 12,90 <small>/ 30 dias</small></div><ul><li>Área VIP privada</li><li>Conteúdo exclusivo</li><li>Atualizações</li></ul><a class="btn secondary" href="/checkout?plan=essential">ESCOLHER</a></article>
+<article class="plan"><h3>🔴 VIP Premium</h3><div class="price">R$ 18,90 <small>/ 30 dias</small></div><ul><li>Conteúdo premium</li><li>Novidades frequentes</li><li>Área privada</li></ul><a class="btn secondary" href="/checkout?plan=premium">ESCOLHER</a></article>
+<article class="plan featured"><div class="ribbon">POPULAR</div><h3>⭐ Premium + Acervo</h3><div class="price">R$ 20,90 <small>/ 30 dias</small></div><ul><li>Acesso Premium</li><li>Acervo exclusivo</li><li>Novidades</li></ul><a class="btn primary" href="/checkout?plan=acervo">ESCOLHER</a></article>
+<article class="plan"><h3>👑 Full + Bônus</h3><div class="price">R$ 29,90 <small>/ 30 dias</small></div><ul><li>Acesso Full</li><li>Bônus para assinantes</li><li>Conteúdo premium</li></ul><a class="btn secondary" href="/checkout?plan=full">ESCOLHER</a></article>
+</div>
+</section>
+
+<section>
+<div class="benefits">
+<div class="benefit"><div class="icon">🔐</div><h3>Privacidade</h3><p>Acesso direcionado para uma área privada de assinantes.</p></div>
+<div class="benefit"><div class="icon">⚡</div><h3>Checkout simples</h3><p>Escolha o plano, preencha seus dados e gere seu PIX.</p></div>
+<div class="benefit"><div class="icon">💎</div><h3>Experiência VIP</h3><p>Uma apresentação premium para quem quer acesso exclusivo.</p></div>
+</div>
+</section>
+
+<section>
+<div class="cta"><h2>Pronto para entrar?</h2><p>Escolha seu plano e continue para o checkout. Serviço destinado exclusivamente a maiores de 18 anos.</p><a class="btn primary" href="/checkout">CONTINUAR PARA O CHECKOUT →</a></div>
+</section>
+</main>
+<footer><div class="age">🔞 Conteúdo e serviço destinados exclusivamente a maiores de 18 anos.</div><div>© 2026 VIPHOT • Acesso privado</div></footer>
+</div>
+</body>
+</html>
