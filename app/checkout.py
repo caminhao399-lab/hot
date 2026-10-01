@@ -10,10 +10,10 @@ BASE = os.getenv("BRAVOPAY_BASE_URL", "https://bravopay.club/api/v1").rstrip("/"
 KEY = os.getenv("BRAVOPAY_API_KEY", "").strip()
 
 PLANS = {
-    "essential": {"name": "VIP Essencial", "amount": 800, "product": os.getenv("BRAVOPAY_PRODUCT_ID_ESSENTIAL", "").strip()},
-    "premium": {"name": "VIP Premium", "amount": 1490, "product": os.getenv("BRAVOPAY_PRODUCT_ID_PREMIUM", "").strip()},
-    "acervo": {"name": "VIP Premium + Acervo", "amount": 1690, "product": os.getenv("BRAVOPAY_PRODUCT_ID_ACERVO", "").strip()},
-    "full": {"name": "Acesso Full + Bônus", "amount": 2390, "product": os.getenv("BRAVOPAY_PRODUCT_ID_FULL", "").strip()},
+    "essential": {"name": "VIP Essencial", "amount": 1290, "product": os.getenv("BRAVOPAY_PRODUCT_ID_ESSENTIAL", "").strip()},
+    "premium": {"name": "VIP Premium", "amount": 1890, "product": os.getenv("BRAVOPAY_PRODUCT_ID_PREMIUM", "").strip()},
+    "acervo": {"name": "VIP Premium + Acervo", "amount": 2090, "product": os.getenv("BRAVOPAY_PRODUCT_ID_ACERVO", "").strip()},
+    "full": {"name": "Acesso Full + Bônus", "amount": 2990, "product": os.getenv("BRAVOPAY_PRODUCT_ID_FULL", "").strip()},
 }
 
 
