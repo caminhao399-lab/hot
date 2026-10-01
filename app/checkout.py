@@ -2,6 +2,7 @@ import os
 import uuid
 import aiohttp
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
 
 router = APIRouter(prefix="/api/checkout")
 BASE = os.getenv("BRAVOPAY_BASE_URL", "https://bravopay.club/api/v1").rstrip("/")
