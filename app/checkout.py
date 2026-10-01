@@ -1,9 +1,7 @@
 import os
-import re
 import uuid
 import aiohttp
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
 
 router = APIRouter(prefix="/api/checkout")
 BASE = os.getenv("BRAVOPAY_BASE_URL", "https://bravopay.club/api/v1").rstrip("/")
@@ -17,16 +15,8 @@ PLANS = {
 }
 
 
-class Customer(BaseModel):
-    name: str
-    email: str
-    phone: str
-    cpf: str
-
-
 class CheckoutRequest(BaseModel):
     plan: str
-    customer: Customer
     utm: dict = {}
 
 
@@ -63,28 +53,9 @@ async def create_payment(req: CheckoutRequest):
     plan = PLANS.get(req.plan)
     if not plan:
         raise HTTPException(400, "Plano inválido.")
-    name = req.customer.name.strip()
-    email = req.customer.email.strip()
-    phone = req.customer.phone.strip()
-    document = digits(req.customer.cpf)
-    if len(name) < 3:
-        raise HTTPException(400, "Nome inválido.")
-    if not valid_email(email):
-        raise HTTPException(400, "E-mail inválido.")
-    if len(digits(phone)) < 10:
-        raise HTTPException(400, "Telefone inválido.")
-    if len(document) not in (11, 14):
-        raise HTTPException(400, "CPF/CNPJ inválido.")
-
     payload = {
         "amount_cents": plan["amount"],
         "method": "pix",
-        "customer": {
-            "name": name,
-            "email": email,
-            "phone": phone,
-            "cpf": document,
-        },
         "external_reference": f"checkout_{uuid.uuid4().hex}",
         "description": plan["name"],
     }
