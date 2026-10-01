@@ -18,7 +18,8 @@ from aiogram.enums import ParseMode
 from aiogram.filters import Command, CommandStart
 from aiogram.types import BotCommand, CallbackQuery, CopyTextButton, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from .checkout import router as checkout_router
+from fastapi.responses import HTMLResponse, JSONResponse
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("hot-bot")
@@ -71,6 +72,7 @@ dp = Dispatcher()
 dp.include_router(router)
 bot = Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 app = FastAPI(title="VIP Telegram Bot")
+app.include_router(checkout_router)
 
 
 def now() -> datetime:
@@ -645,9 +647,15 @@ async def bravopay_webhook(request: Request):
     return JSONResponse({"ok": True, "event_id": event_id})
 
 
-@app.get("/")
+@app.get("/", response_class=HTMLResponse)
 async def root():
-    return {"service": "vip-telegram-bot", "status": "ok"}
+    landing = Path(__file__).with_name("landing.html").read_text(encoding="utf-8")
+    return HTMLResponse(landing)
+
+
+@app.get("/obrigado", response_class=HTMLResponse)
+async def obrigado():
+    return HTMLResponse("""<!doctype html><html lang=&quot;pt-BR&quot;><head><meta charset=&quot;utf-8&quot;><meta name=&quot;viewport&quot; content=&quot;width=device-width,initial-scale=1&quot;><title>Pagamento confirmado</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#09070c;color:#fff;font-family:system-ui,sans-serif}.card{width:min(520px,88%);padding:34px;border:1px solid #29212e;border-radius:26px;background:#151019;text-align:center;box-shadow:0 25px 80px #000}.ok{font-size:56px}h1{margin:12px 0}.p{color:#bdb5c3;line-height:1.6}.btn{display:inline-block;margin-top:18px;padding:14px 20px;border-radius:14px;background:linear-gradient(135deg,#fff,#ff7ab4);color:#180812;text-decoration:none;font-weight:900}</style></head><body><main class=&quot;card&quot;><div class=&quot;ok&quot;>✓</div><h1>Pagamento confirmado</h1><p class=&quot;p&quot;>Seu pagamento foi recebido. Para continuar, abra o bot e siga as instruções para acessar sua área VIP.</p><a class=&quot;btn&quot; href=&quot;https://t.me/${BOT_USERNAME}&quot;>ABRIR TELEGRAM →</a></main></body></html>""".replace("&quot;", '"'))
 
 
 @app.get("/health")
