@@ -46,13 +46,20 @@ h1 em{font-style:normal;background:linear-gradient(90deg,#fff,var(--pink2));-web
 .cardtop{display:flex;justify-content:space-between;align-items:flex-start;position:relative;z-index:1}.mark{font-weight:950;font-size:18px;letter-spacing:.18em}.mark span{color:var(--pink)}
 .cardcopy{position:relative;z-index:1;margin-top:75px}.cardcopy small{color:#aaa;font-size:11px;letter-spacing:.15em}.cardcopy strong{display:block;font-size:34px;margin-top:8px}.cardcopy p{color:#d2cbd5;margin:8px 0 0}
 .cardbottom{position:absolute;z-index:1;bottom:24px;left:26px;right:26px;display:flex;justify-content:space-between;color:#d7d0da;font-size:11px;letter-spacing:.1em}
+.video-spotlight{padding:18px 0 40px;text-align:center}
+.video-frame{position:relative;width:min(380px,86vw);margin:0 auto;border-radius:28px;overflow:hidden;border:1px solid rgba(255,61,141,.42);background:#050307;box-shadow:0 25px 80px rgba(0,0,0,.55),0 0 55px rgba(255,61,141,.14)}
+.video-frame:before{content:"";position:absolute;inset:0;z-index:2;pointer-events:none;background:linear-gradient(180deg,rgba(0,0,0,.08),transparent 55%,rgba(0,0,0,.55))}
+.video-frame video{display:block;width:100%;height:auto;aspect-ratio:9/16;object-fit:cover}
+.video-badge{position:absolute;z-index:3;top:16px;left:16px;padding:8px 11px;border-radius:999px;background:rgba(8,6,10,.72);border:1px solid rgba(255,255,255,.16);font-size:11px;font-weight:900;letter-spacing:.08em;backdrop-filter:blur(10px)}
+.video-cta{position:absolute;z-index:3;left:18px;right:18px;bottom:18px;padding:13px 16px;border-radius:15px;text-decoration:none;color:#160812;font-weight:950;background:linear-gradient(135deg,#fff,var(--pink2));box-shadow:0 10px 35px rgba(255,61,141,.28)}
+.video-note{margin:13px auto 0;color:#a9a1ad;font-size:11px}
 section{padding:70px 0}.section-title{text-align:center;max-width:680px;margin:0 auto 30px}.section-title h2{font-size:36px;margin:0 0 10px;letter-spacing:-.04em}.section-title p{color:var(--muted);line-height:1.6}
 .plans{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}.plan{position:relative;display:flex;flex-direction:column;border:1px solid var(--line);background:var(--card);border-radius:22px;padding:22px;min-height:245px;box-shadow:0 15px 45px rgba(0,0,0,.22)}.plan.featured{border-color:rgba(255,61,141,.48);box-shadow:0 20px 55px rgba(255,61,141,.10)}.ribbon{position:absolute;top:14px;right:14px;font-size:10px;font-weight:900;color:#1b0b12;background:var(--gold);padding:6px 8px;border-radius:999px}.plan h3{margin:0 0 9px;font-size:18px}.price{font-size:30px;font-weight:950;margin:5px 0}.price small{font-size:12px;color:#aaa;font-weight:600}.plan ul{list-style:none;padding:0;margin:12px 0 20px;color:#bdb5c3;font-size:13px;line-height:1.8}.plan li:before{content:"✓";color:var(--pink2);font-weight:900;margin-right:8px}.plan .btn{margin-top:auto;width:100%;padding:12px}
 .benefits{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}.benefit{padding:24px;border:1px solid var(--line);border-radius:20px;background:rgba(255,255,255,.035)}.benefit .icon{font-size:25px}.benefit h3{margin:12px 0 7px}.benefit p{margin:0;color:var(--muted);line-height:1.55;font-size:14px}
 .cta{border:1px solid rgba(255,61,141,.25);background:linear-gradient(135deg,rgba(255,61,141,.12),rgba(255,255,255,.035));border-radius:28px;padding:38px;text-align:center}.cta h2{font-size:38px;margin:0 0 10px}.cta p{color:var(--muted);margin:0 auto 22px;max-width:600px;line-height:1.6}
 footer{padding:30px 0 45px;color:#77717d;font-size:11px;text-align:center}.age{color:#c6bec9}
 @media(max-width:900px){.hero{grid-template-columns:1fr}.visa{max-width:600px;margin:0 auto;width:100%}.plans{grid-template-columns:repeat(2,1fr)}}
-@media(max-width:560px){nav{padding-top:16px}.hero{padding-top:25px}.plans,.benefits{grid-template-columns:1fr}h1{font-size:47px}.visa{min-height:320px}.cardcopy{margin-top:58px}.cta{padding:28px 20px}.cta h2{font-size:30px}}
+@media(max-width:560px){nav{padding-top:16px}.hero{padding-top:25px}.plans,.benefits{grid-template-columns:1fr}h1{font-size:47px}.visa{min-height:320px}.cardcopy{margin-top:58px}.cta{padding:28px 20px}.cta h2{font-size:30px}.video-spotlight{padding-top:4px}}
 .testimonials{padding:0 0 70px}.reviews{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}.review{border:1px solid var(--line);border-radius:20px;background:rgba(255,255,255,.035);padding:22px;box-shadow:0 15px 45px rgba(0,0,0,.16)}.stars{color:var(--gold);letter-spacing:3px;font-size:13px}.review p{font-size:15px;line-height:1.6;color:#eee;margin:13px 0}.reviewhead{display:flex;align-items:center;gap:11px}.avatar{width:42px;height:42px;border-radius:50%;display:grid;place-items:center;background:linear-gradient(135deg,rgba(255,61,141,.45),rgba(255,211,107,.3));border:1px solid rgba(255,255,255,.14);font-weight:900}.reviewer{font-size:12px;color:#d8d0da}.reviewer small{display:block;color:#817986;font-size:10px;margin-top:3px}@media(max-width:900px){.reviews{grid-template-columns:1fr}}</style>
 </head>
 <body>
@@ -72,6 +79,18 @@ footer{padding:30px 0 45px;color:#77717d;font-size:11px;text-align:center}.age{c
 <div class="cardcopy"><small>MEMBERSHIP CARD</small><strong>ACCESS • PRIVATE</strong><p>Conteúdo premium para assinantes.</p></div>
 <div class="cardbottom"><span>18+ ONLY</span><span>VIP MEMBER</span></div>
 </div>
+</section>
+
+<section class="video-spotlight" aria-label="Vídeo de destaque">
+<div class="video-frame">
+<div class="video-badge">🔞 PRÉVIA • 18+</div>
+<video autoplay muted loop playsinline preload="metadata" controlslist="nodownload noplaybackrate" disablepictureinpicture>
+<source src="/static/vip-spotlight.mp4" type="video/mp4">
+Seu navegador não suporta vídeo HTML5.
+</video>
+<a class="video-cta" href="#planos">QUERO VER OS PLANOS →</a>
+</div>
+<div class="video-note">Prévia em reprodução automática • áudio desativado</div>
 </section>
 
 <section id="planos">
